@@ -49,6 +49,16 @@ document.addEventListener("keydown", function(event) {
 }, true);
 </script>
 """
+DELETE_CONVERSATION_CONFIRM_JS = """
+function(conversationId) {
+  if (!conversationId) {
+    alert("삭제할 저장된 대화를 먼저 선택해 주세요.");
+    return [""];
+  }
+  const confirmed = confirm("선택한 저장된 대화를 영구 삭제할까요?\\n이 작업은 되돌릴 수 없습니다.");
+  return [confirmed ? conversationId : ""];
+}
+"""
 
 
 def _trace_message(trace: dict[str, Any]) -> str:
@@ -190,6 +200,12 @@ def archive_chat(conversation_id: str | None) -> tuple:
     return (_chat_notice(), {}, "", *_conversation_button_updates(None))
 
 
+def delete_chat(conversation_id: str | None) -> tuple:
+    if conversation_id:
+        runtime.delete_conversation(conversation_id)
+    return (_chat_notice(), {}, "", *_conversation_button_updates(None))
+
+
 def conversation_id_at(index: int) -> str:
     rows = _conversation_rows()
     if 0 <= index < len(rows):
@@ -199,7 +215,7 @@ def conversation_id_at(index: int) -> str:
 
 def build_demo() -> gr.Blocks:
     with gr.Blocks(title="Kanana Schedule Agent") as demo:
-        conversation_id = gr.State("")
+        conversation_id = gr.Textbox(value="", visible=False, elem_id="selected-conversation-id", container=False)
         pending_message = gr.State("")
         gr.HTML(
             f"""
@@ -225,6 +241,7 @@ def build_demo() -> gr.Blocks:
                             for _ in range(MAX_CONVERSATION_BUTTONS)
                         ]
                         archive_btn = gr.Button("현재 대화 보관", elem_classes=["ghost-action"])
+                        delete_btn = gr.Button("저장된 대화 삭제", elem_classes=["danger-action"])
                     with gr.Column(scale=4, min_width=560, elem_classes=["chat-panel"]):
                         chatbot = gr.Chatbot(
                             value=_chat_notice(),
@@ -269,6 +286,13 @@ def build_demo() -> gr.Blocks:
         )
         new_btn.click(new_chat, outputs=[chatbot, trace_json, conversation_id, *conversation_buttons])
         archive_btn.click(archive_chat, inputs=[conversation_id], outputs=[chatbot, trace_json, conversation_id, *conversation_buttons])
+        delete_btn.click(
+            delete_chat,
+            inputs=[conversation_id],
+            outputs=[chatbot, trace_json, conversation_id, *conversation_buttons],
+            js=DELETE_CONVERSATION_CONFIRM_JS,
+            queue=False,
+        )
         for index, conversation_button in enumerate(conversation_buttons):
             conversation_button.click(
                 lambda idx=index: conversation_id_at(idx),

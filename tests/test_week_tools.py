@@ -357,6 +357,34 @@ def test_new_chat_notice_hides_saved_database_schedules_from_ui(monkeypatch) -> 
     assert notice == []
 
 
+def test_delete_conversation_removes_messages(tmp_path) -> None:
+    store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    conversation = store.create_conversation("삭제할 대화")
+    conversation_id = conversation["conversation_id"]
+    store.append_message(conversation_id, "user", "안녕")
+    store.append_message(conversation_id, "assistant", "반가워")
+
+    result = store.delete_conversation(conversation_id)
+
+    assert result == {"conversation_id": conversation_id, "deleted": True}
+    assert store.load_conversation(conversation_id) == []
+    assert all(row["conversation_id"] != conversation_id for row in store.list_conversations())
+
+
+def test_delete_chat_clears_selected_conversation(monkeypatch) -> None:
+    deleted: list[str | None] = []
+    monkeypatch.setattr(app_module.runtime, "delete_conversation", lambda conversation_id: deleted.append(conversation_id))
+    monkeypatch.setattr(app_module, "_conversation_button_updates", lambda selected_id=None: ["buttons"])
+
+    history, trace, conversation_id, buttons = app_module.delete_chat("conv_selected")
+
+    assert deleted == ["conv_selected"]
+    assert history == []
+    assert trace == {}
+    assert conversation_id == ""
+    assert buttons == "buttons"
+
+
 def test_delete_schedule_by_query_without_schedule_id(monkeypatch, tmp_path) -> None:
     store = AppSQLiteStore(tmp_path / "app.sqlite3")
     store.save_structured_request(

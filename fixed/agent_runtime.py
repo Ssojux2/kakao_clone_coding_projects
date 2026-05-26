@@ -41,6 +41,9 @@ class AgentRuntime:
         if conversation_id:
             self.app_store.archive_conversation(conversation_id)
 
+    def delete_conversation(self, conversation_id: str | None) -> None:
+        self.app_store.delete_conversation(conversation_id)
+
     def run_agent(self, user_message: str, conversation_id: str | None) -> RuntimeResult:
         conversation_id = self.ensure_conversation(conversation_id, user_message)
         previous_messages = self.app_store.load_conversation(conversation_id)

@@ -93,6 +93,18 @@ body,
   margin-top: 12px !important;
 }
 
+.danger-action {
+  background: #fff7f7 !important;
+  border: 1px solid #f1c1c1 !important;
+  color: #b42318 !important;
+  font-weight: 700 !important;
+  margin-top: 6px !important;
+}
+
+.danger-action:hover {
+  background: #ffe8e8 !important;
+}
+
 .conversation-list-title {
   color: var(--kanana-muted);
   font-size: 12px;
@@ -250,7 +262,27 @@ body,
   }
 
   #kanana-shell {
+    flex-direction: column !important;
     min-height: auto;
+  }
+
+  #kanana-shell > .gradio-column {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+  }
+
+  .chat-panel {
+    min-width: 0 !important;
+    order: 1;
+    width: 100% !important;
+  }
+
+  .sidebar,
+  .column.sidebar {
+    max-height: none;
+    min-width: 0 !important;
+    order: 2;
+    width: 100% !important;
   }
 
   .trace-panel {

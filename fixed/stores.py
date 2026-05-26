@@ -186,6 +186,14 @@ class AppSQLiteStore:
             )
         return {"conversation_id": conversation_id, "status": "archived"}
 
+    def delete_conversation(self, conversation_id: str | None) -> dict[str, Any]:
+        if not conversation_id:
+            return {"conversation_id": "", "deleted": False}
+        with self.connect() as conn:
+            conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
+            cur = conn.execute("DELETE FROM conversations WHERE conversation_id = ?", (conversation_id,))
+        return {"conversation_id": conversation_id, "deleted": cur.rowcount > 0}
+
     def save_structured_request(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_id = new_id("req")
         kind = payload.get("kind", "unknown")
