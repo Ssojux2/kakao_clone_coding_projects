@@ -9,7 +9,7 @@ if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
 from golden_cases import GOLDEN_CASES
-from student_parts.week06_subagents import (
+from student_parts.week06_kanamate_decides_schedule import (
     agent_tool_names,
     kana_system_prompt,
     nana_system_prompt,

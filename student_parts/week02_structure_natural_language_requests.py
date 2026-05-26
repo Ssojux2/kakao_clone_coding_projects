@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
 from langchain.agents import create_agent
+from langchain.tools import tool
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from fixed.config import CONFIG
 from fixed.runtime_clock import current_app_date_iso
+from student_parts.week01_wake_up_nana import week01_tools
 
 
 RequestKind = Literal["personal_schedule", "group_schedule", "todo", "reminder", "unknown"]
@@ -94,7 +97,29 @@ def extract_structured_request(text: str) -> StructuredRequest:
     return _structured_response_from_result(result)
 
 
+@tool
+def extract_schedule_request(query: str) -> str:
+    """사용자 프롬프트를 일정 앱용 구조화 요청 JSON으로 변환합니다."""
+
+    structured = extract_structured_request(query)
+    return json.dumps(
+        {
+            "ok": True,
+            "tool_name": "extract_schedule_request",
+            "base_date": current_app_date_iso(),
+            "structured_request": structured.model_dump(),
+        },
+        ensure_ascii=False,
+    )
+
+
 def extract_structured_request_with_langchain(text: str) -> StructuredRequest:
     """기존 import 호환을 위한 별칭입니다. 2주차는 항상 LLM structured output을 사용합니다."""
 
     return extract_structured_request(text)
+
+
+def week02_tools() -> list[Any]:
+    """1주차 도구에 2주차 structured output 도구를 누적한 목록입니다."""
+
+    return [*week01_tools(), extract_schedule_request]

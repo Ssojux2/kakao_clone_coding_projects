@@ -11,9 +11,17 @@ from langchain.tools import tool
 
 from fixed.config import CONFIG, PACKAGE_ROOT
 from fixed.stores import ExternalPeopleSQLiteStore
+from student_parts.week01_wake_up_nana import ensure_demo_personal_schedule, list_personal_schedule_dicts
+from student_parts.week04_retrieve_nanas_memory import week04_tools
 
 
 EXTERNAL_STORE = ExternalPeopleSQLiteStore(CONFIG.external_db_path)
+MEMBER_ALIAS = {"A": "민준", "B": "서연", "C": "지훈"}
+
+
+def _normalize_members(member_names: list[str]) -> list[str]:
+    normalized = [MEMBER_ALIAS.get(name, name) for name in member_names]
+    return normalized or ["민준", "서연", "지훈"]
 
 
 @tool
@@ -58,6 +66,41 @@ def extract_schedules_from_history(member_names: list[str], date_from: str, date
         date_to=date_to,
     )
     return json.dumps({"ok": True, "tool_name": "extract_schedules_from_history", "rows": rows}, ensure_ascii=False)
+
+
+@tool
+def collect_member_schedules(member_names: list[str], date_from: str, date_to: str) -> str:
+    """내 일정과 다른 사람들의 일정을 MCP SQLite 기록에서 모읍니다."""
+
+    # [5주차 -> 6주차 누적 사용]
+    # 내 개인 일정은 1주차 Nana 도구에서, 다른 사람들의 일정은 5주차 외부 SQLite 도구에서 모아옵니다.
+    ensure_demo_personal_schedule()
+    normalized_members = _normalize_members(member_names)
+    my_rows = [
+        {
+            "member_name": "나",
+            "title": row["title"],
+            "date": row["date"],
+            "start_time": row["start_time"],
+            "end_time": row["end_time"] if row["end_time"] != "미정" else "18:00",
+            "notes": "Nana 개인 일정",
+        }
+        for row in list_personal_schedule_dicts(date_from=date_from, date_to=date_to)
+    ]
+    external_rows = extract_schedules_from_history_dict(
+        member_names=normalized_members,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return json.dumps(
+        {
+            "ok": True,
+            "tool_name": "collect_member_schedules",
+            "members": ["나", *normalized_members],
+            "rows": [*my_rows, *external_rows],
+        },
+        ensure_ascii=False,
+    )
 
 
 async def load_langchain_mcp_tools() -> list[Any]:
@@ -108,3 +151,15 @@ def extract_schedules_from_history_dict(member_names: list[str], date_from: str,
             {"member_names": member_names, "date_from": date_from, "date_to": date_to}
         )
     )["rows"]
+
+
+def week05_tools() -> list[Any]:
+    """4주차까지의 도구에 외부 SQLite/MCP 일정 도구를 누적한 목록입니다."""
+
+    return [
+        *week04_tools(),
+        search_previous_conversations,
+        load_conversation_messages,
+        extract_schedules_from_history,
+        collect_member_schedules,
+    ]

@@ -13,13 +13,17 @@ if str(PROJECT_ROOT) not in sys.path:
 import fixed.agent_runtime as agent_runtime_module
 import fixed.runtime_clock as runtime_clock
 import app as app_module
-import student_parts.week02_structured_output as week02_module
-import student_parts.week06_subagents as week06_module
+import student_parts.week02_structure_natural_language_requests as week02_module
+import student_parts.week06_kanamate_decides_schedule as week06_module
 from fixed.agent_runtime import AgentRuntime
 from fixed.stores import AppSQLiteStore
 from golden_cases import GOLDEN_CASES, find_case_by_input, harness_prompt_examples, sample_prompts
-from student_parts.week01_tools import PERSONAL_SCHEDULES, personal_create_schedule
-from student_parts.week06_subagents import (
+from student_parts.week01_wake_up_nana import PERSONAL_SCHEDULES, personal_create_schedule, week01_tools
+from student_parts.week02_structure_natural_language_requests import week02_tools
+from student_parts.week03_build_nanas_logbook import week03_tools
+from student_parts.week04_retrieve_nanas_memory import week04_tools
+from student_parts.week05_load_kanas_past_conversations import week05_tools
+from student_parts.week06_kanamate_decides_schedule import (
     agent_tool_names,
     delete_saved_schedules_dict,
     delete_schedule_by_query_dict,
@@ -56,6 +60,10 @@ class FakeStructuredRequest:
 
     def model_dump(self) -> dict:
         return self.payload
+
+
+def _tool_names(tools: list[object]) -> set[str]:
+    return {getattr(item, "name", getattr(item, "__name__", str(item))) for item in tools}
 
 
 def test_prompt_harness_is_the_shared_reference() -> None:
@@ -139,6 +147,26 @@ def test_expected_tools_are_exposed_to_prompt_driven_agents() -> None:
             assert case["expected_tool"] in nana_tools
         else:
             assert case["expected_tool"] in kana_tools
+
+
+def test_week_tool_lists_accumulate_previous_weeks() -> None:
+    week1 = _tool_names(week01_tools())
+    week2 = _tool_names(week02_tools())
+    week3 = _tool_names(week03_tools())
+    week4 = _tool_names(week04_tools())
+    week5 = _tool_names(week05_tools())
+
+    assert week1 == {"personal_create_schedule", "personal_list_schedules", "personal_delete_schedule"}
+    assert week1 <= week2
+    assert "extract_schedule_request" in week2
+    assert week2 <= week3
+    assert {"save_structured_request", "personal_delete_schedule_by_query"} <= week3
+    assert week3 <= week4
+    assert {"search_personal_references", "build_rag_context"} <= week4
+    assert week4 <= week5
+    assert {"extract_schedules_from_history", "collect_member_schedules"} <= week5
+    assert week3 <= set(agent_tool_names("nana_agent"))
+    assert {"extract_schedule_request", "collect_member_schedules"} <= set(agent_tool_names("kana_agent"))
 
 
 def test_week1_create_schedule_returns_db_ready_structured_output(tmp_path) -> None:

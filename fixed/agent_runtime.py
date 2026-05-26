@@ -104,7 +104,7 @@ class AgentRuntime:
 
     def _get_supervisor_agent(self) -> Any:
         if self._supervisor_agent is None:
-            from student_parts.week06_subagents import build_langchain_supervisor_agent
+            from student_parts.week06_kanamate_decides_schedule import build_langchain_supervisor_agent
 
             self._supervisor_agent = build_langchain_supervisor_agent()
         return self._supervisor_agent

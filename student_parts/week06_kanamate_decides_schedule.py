@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from langchain.agents import create_agent
@@ -10,214 +9,62 @@ from langchain_openai import ChatOpenAI
 
 from fixed.config import CONFIG
 from fixed.runtime_clock import current_app_date_iso
-from fixed.stores import AppSQLiteStore
 from golden_cases import harness_prompt_examples
-from student_parts.week01_tools import (
+from student_parts.week01_wake_up_nana import (
     ensure_demo_personal_schedule,
     list_personal_schedule_dicts,
     personal_create_schedule,
     personal_delete_schedule,
     personal_list_schedules,
 )
-from student_parts.week02_structured_output import extract_structured_request
-from student_parts.week03_sqlite_store import get_saved_request, list_saved_requests, save_structured_request
-from student_parts.week04_agentic_rag import (
+from student_parts.week02_structure_natural_language_requests import extract_structured_request, week02_tools
+from student_parts.week03_build_nanas_logbook import (
+    delete_saved_schedules_dict,
+    get_saved_request,
+    list_saved_requests,
+    personal_delete_saved_schedules,
+    personal_list_saved_schedules,
+    save_structured_request,
+    week03_tools,
+)
+from student_parts import week03_build_nanas_logbook as week03_store
+from student_parts.week04_retrieve_nanas_memory import (
     add_personal_reference,
     build_rag_context,
     search_personal_references,
     search_saved_requests,
+    week04_tools,
 )
-from student_parts.week05_mcp_sqlite import (
+from student_parts.week05_load_kanas_past_conversations import (
+    _normalize_members,
+    collect_member_schedules,
     extract_schedules_from_history,
-    extract_schedules_from_history_dict,
     load_conversation_messages,
     search_previous_conversations,
+    week05_tools,
 )
 
 
-MEMBER_ALIAS = {"A": "민준", "B": "서연", "C": "지훈"}
 _NANA_SUBAGENT: Any | None = None
 _KANA_SUBAGENT: Any | None = None
-_DELETE_ALL_WORDS = ("전체", "전부", "모든", "모두", "all", "every")
 
 
-def _normalize_members(member_names: list[str]) -> list[str]:
-    normalized = [MEMBER_ALIAS.get(name, name) for name in member_names]
-    return normalized or ["민준", "서연", "지훈"]
+def delete_schedule_by_query_dict(query: str, app_store: Any | None = None) -> dict[str, Any]:
+    """기존 Week 6 import 호환을 유지하며 Week 3 삭제 헬퍼를 호출합니다."""
+
+    original = week03_store.extract_structured_request
+    week03_store.extract_structured_request = extract_structured_request
+    try:
+        return week03_store.delete_schedule_by_query_dict(query, app_store=app_store)
+    finally:
+        week03_store.extract_structured_request = original
 
 
-def _compact(value: str | None) -> str:
-    return re.sub(r"[^0-9A-Za-z가-힣]+", "", value or "").lower()
+@tool
+def personal_delete_schedule_by_query(query: str) -> str:
+    """일정 ID가 없어도 사용자 프롬프트의 날짜, 시간, 제목 단서로 개인 일정을 찾아 삭제합니다."""
 
-
-def _query_mentions_date(query: str) -> bool:
-    return bool(
-        re.search(r"20\d{2}[-./]\d{1,2}[-./]\d{1,2}", query)
-        or re.search(r"\d{1,2}월\s*\d{1,2}일", query)
-        or any(word in query for word in ["오늘", "내일", "모레", "다음 주", "다음주"])
-    )
-
-
-def _query_wants_all_schedules(query: str) -> bool:
-    compact = _compact(query)
-    return any(word in compact for word in _DELETE_ALL_WORDS) or bool(re.search(r"(?:총\s*)?\d+\s*건", query))
-
-
-def _title_filter_from_structured(structured: dict[str, Any]) -> str | None:
-    title = str(structured.get("title") or "").strip()
-    compact_title = _compact(title)
-    if not title or title in {"개인 일정", "그룹 일정", "제목 없음"}:
-        return None
-    if any(word in compact_title for word in ["삭제", "지워", "취소", "전체", "전부", "모든", "모두"]):
-        return None
-    return title
-
-
-def _delete_filter_from_query(query: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    structured_model = extract_structured_request(query)
-    structured = structured_model.model_dump()
-    filters: dict[str, Any] = {}
-    if _query_mentions_date(query) and structured.get("date"):
-        filters["date"] = structured["date"]
-    if structured.get("start_time"):
-        filters["start_time"] = structured["start_time"]
-    if "시간미정" in _compact(query):
-        filters["time_unspecified"] = True
-    title = _title_filter_from_structured(structured)
-    if title:
-        filters["title"] = title
-    return structured, filters
-
-
-def _memory_schedule_matches(
-    schedule: dict[str, Any],
-    schedule_ids: list[str] | None = None,
-    date: str | None = None,
-    title: str | None = None,
-    start_time: str | None = None,
-    time_unspecified: bool = False,
-) -> bool:
-    if schedule_ids is not None and schedule["id"] not in schedule_ids:
-        return False
-    if date and schedule.get("date") != date:
-        return False
-    if title and _compact(title) not in _compact(schedule.get("title")):
-        return False
-    if start_time and schedule.get("start_time") != start_time:
-        return False
-    if time_unspecified and schedule.get("start_time") not in {None, "", "미정"}:
-        return False
-    return True
-
-
-def _delete_memory_schedules(
-    schedule_ids: list[str] | None = None,
-    date: str | None = None,
-    title: str | None = None,
-    start_time: str | None = None,
-    time_unspecified: bool = False,
-    delete_all: bool = False,
-) -> list[dict[str, Any]]:
-    rows = list(list_personal_schedule_dicts())
-    if not delete_all:
-        rows = [
-            row
-            for row in rows
-            if _memory_schedule_matches(
-                row,
-                schedule_ids=schedule_ids,
-                date=date,
-                title=title,
-                start_time=start_time,
-                time_unspecified=time_unspecified,
-            )
-        ]
-    deleted: list[dict[str, Any]] = []
-    for row in rows:
-        result = json.loads(personal_delete_schedule.invoke({"schedule_id": row["id"]}))
-        if result.get("deleted"):
-            deleted.append(row)
-    return deleted
-
-
-def delete_saved_schedules_dict(
-    schedule_ids: list[str] | None = None,
-    date: str | None = None,
-    title: str | None = None,
-    start_time: str | None = None,
-    time_unspecified: bool = False,
-    delete_all: bool = False,
-    app_store: AppSQLiteStore | None = None,
-) -> dict[str, Any]:
-    store = app_store or AppSQLiteStore(CONFIG.app_db_path)
-    has_filter = schedule_ids is not None or any([date, title, start_time, time_unspecified])
-    if not delete_all and not has_filter:
-        return {
-            "ok": False,
-            "tool_name": "personal_delete_saved_schedules",
-            "reason": "삭제할 일정 ID나 날짜/제목/시간 필터가 필요합니다.",
-            "delete_all": False,
-            "bulk_delete": False,
-            "deleted_count": 0,
-            "filters": {
-                "schedule_ids": schedule_ids,
-                "date": date,
-                "title": title,
-                "start_time": start_time,
-                "time_unspecified": time_unspecified,
-            },
-            "deleted": [],
-        }
-    if delete_all:
-        app_deleted = store.delete_all_schedules()
-    else:
-        app_deleted = store.delete_schedules_by_filter(
-            schedule_ids=schedule_ids,
-            date=date,
-            title=title,
-            start_time=start_time,
-            time_unspecified=time_unspecified,
-        )
-    memory_deleted = _delete_memory_schedules(
-        schedule_ids=schedule_ids,
-        date=date,
-        title=title,
-        start_time=start_time,
-        time_unspecified=time_unspecified,
-        delete_all=delete_all,
-    )
-
-    deleted = [
-        *({"source": "app_db", "schedule": row} for row in app_deleted),
-        *({"source": "memory", "schedule": row} for row in memory_deleted),
-    ]
-
-    return {
-        "ok": bool(deleted),
-        "tool_name": "personal_delete_saved_schedules",
-        "delete_all": delete_all,
-        "bulk_delete": bool(not delete_all and deleted),
-        "deleted_count": len(deleted),
-        "filters": {
-            "schedule_ids": schedule_ids,
-            "date": date,
-            "title": title,
-            "start_time": start_time,
-            "time_unspecified": time_unspecified,
-        },
-        "deleted": deleted,
-    }
-
-
-def delete_schedule_by_query_dict(query: str, app_store: AppSQLiteStore | None = None) -> dict[str, Any]:
-    structured, filters = _delete_filter_from_query(query)
-    delete_all = _query_wants_all_schedules(query) and not filters
-    result = delete_saved_schedules_dict(delete_all=delete_all, app_store=app_store, **filters)
-    result["tool_name"] = "personal_delete_schedule_by_query"
-    result["structured_request"] = structured
-    if not result["ok"] and not filters and not delete_all:
-        result["reason"] = "삭제할 일정을 충분히 특정하지 못했습니다. 먼저 저장 일정 목록을 확인해 주세요."
-    return result
+    return json.dumps(delete_schedule_by_query_dict(query), ensure_ascii=False)
 
 
 def _chat_model() -> ChatOpenAI:
@@ -373,22 +220,7 @@ def extract_schedule_request(query: str) -> str:
 
 
 def nana_tools() -> list[Any]:
-    return [
-        extract_schedule_request,
-        personal_create_schedule,
-        personal_list_schedules,
-        personal_delete_schedule,
-        personal_list_saved_schedules,
-        personal_delete_saved_schedules,
-        personal_delete_schedule_by_query,
-        save_structured_request,
-        list_saved_requests,
-        get_saved_request,
-        add_personal_reference,
-        search_personal_references,
-        search_saved_requests,
-        build_rag_context,
-    ]
+    return week04_tools()
 
 
 def kana_tools() -> list[Any]:
@@ -443,89 +275,6 @@ def build_kana_subagent() -> object:
 
 
 @tool
-def personal_list_saved_schedules(limit: int = 50) -> str:
-    """앱 DB에 저장된 일정 목록을 반환합니다. Nana가 삭제 후보를 직접 고를 때 사용합니다."""
-
-    store = AppSQLiteStore(CONFIG.app_db_path)
-    return json.dumps(
-        {
-            "ok": True,
-            "tool_name": "personal_list_saved_schedules",
-            "schedules": store.list_schedules(limit=limit),
-        },
-        ensure_ascii=False,
-    )
-
-
-@tool
-def personal_delete_saved_schedules(
-    schedule_ids: list[str] | None = None,
-    date: str | None = None,
-    title: str | None = None,
-    start_time: str | None = None,
-    time_unspecified: bool = False,
-    delete_all: bool = False,
-) -> str:
-    """Nana가 고른 일정 ID나 날짜/제목/시간 필터로 저장 일정을 삭제합니다."""
-
-    return json.dumps(
-        delete_saved_schedules_dict(
-            schedule_ids=schedule_ids,
-            date=date,
-            title=title,
-            start_time=start_time,
-            time_unspecified=time_unspecified,
-            delete_all=delete_all,
-        ),
-        ensure_ascii=False,
-    )
-
-
-@tool
-def personal_delete_schedule_by_query(query: str) -> str:
-    """일정 ID가 없어도 사용자 프롬프트의 날짜, 시간, 제목 단서로 개인 일정을 찾아 삭제합니다."""
-
-    return json.dumps(delete_schedule_by_query_dict(query), ensure_ascii=False)
-
-
-@tool
-def collect_member_schedules(member_names: list[str], date_from: str, date_to: str) -> str:
-    """내 일정과 다른 사람들의 일정을 MCP SQLite 기록에서 모읍니다."""
-
-    # [6주차][학생 구현]
-    # 내 개인 일정은 Nana 도구에서, 다른 사람들의 일정은 5주차 MCP SQLite 도구에서 모아오세요.
-    #
-    # [참고 답안]
-    ensure_demo_personal_schedule()
-    normalized_members = _normalize_members(member_names)
-    my_rows = [
-        {
-            "member_name": "나",
-            "title": row["title"],
-            "date": row["date"],
-            "start_time": row["start_time"],
-            "end_time": row["end_time"] if row["end_time"] != "미정" else "18:00",
-            "notes": "Nana 개인 일정",
-        }
-        for row in list_personal_schedule_dicts(date_from=date_from, date_to=date_to)
-    ]
-    external_rows = extract_schedules_from_history_dict(
-        member_names=normalized_members,
-        date_from=date_from,
-        date_to=date_to,
-    )
-    return json.dumps(
-        {
-            "ok": True,
-            "tool_name": "collect_member_schedules",
-            "members": ["나", *normalized_members],
-            "rows": [*my_rows, *external_rows],
-        },
-        ensure_ascii=False,
-    )
-
-
-@tool
 def propose_group_schedule(
     title: str,
     member_names: list[str],
@@ -538,8 +287,6 @@ def propose_group_schedule(
     # [6주차][학생 구현]
     # 가장 적합한 시간은 Kana가 collect_member_schedules 결과를 보고 직접 고릅니다.
     # 이 도구는 Kana가 고른 selected_slot을 최종 일정 결정 페이로드로 포장합니다.
-    #
-    # [참고 답안]
     slots = candidate_slots or []
     selected = selected_slot or (slots[0] if slots else None)
     payload = {
@@ -558,8 +305,6 @@ def nana_agent(query: str) -> str:
 
     # [6주차][학생 구현]
     # supervisor 에이전트가 개인 일정 요청을 위임하면 Nana 하위 에이전트가 내부 도구들을 프롬프트 기준으로 선택하게 하세요.
-    #
-    # [참고 답안]
     if not CONFIG.has_openai_key:
         return json.dumps(
             {
@@ -594,8 +339,6 @@ def kana_agent(query: str) -> str:
 
     # [6주차][학생 구현]
     # Kana 하위 에이전트가 MCP SQLite의 다른 사람 일정과 Nana의 개인 일정을 도구 호출로 종합하게 하세요.
-    #
-    # [참고 답안]
     if not CONFIG.has_openai_key:
         return json.dumps(
             {

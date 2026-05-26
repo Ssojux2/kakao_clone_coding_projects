@@ -7,6 +7,7 @@ from langchain.tools import tool
 
 from fixed.config import CONFIG
 from fixed.stores import AppSQLiteStore, PersonalReferenceStore
+from student_parts.week03_build_nanas_logbook import week03_tools
 
 
 REFERENCE_STORE = PersonalReferenceStore(CONFIG.chroma_dir)
@@ -80,3 +81,15 @@ def build_rag_context_dict(reference_hits: list[dict[str, Any]], sqlite_hits: li
     return json.loads(
         build_rag_context.invoke({"reference_hits": reference_hits, "sqlite_hits": sqlite_hits})
     )["context"]
+
+
+def week04_tools() -> list[Any]:
+    """3주차까지의 도구에 4주차 RAG 도구를 누적한 목록입니다."""
+
+    return [
+        *week03_tools(),
+        add_personal_reference,
+        search_personal_references,
+        search_saved_requests,
+        build_rag_context,
+    ]

@@ -66,14 +66,14 @@ flowchart TD
 
 | 주차 | 파일 | 핵심 개념 | 구현/확인 포인트 |
 | --- | --- | --- | --- |
-| Week 1 | `student_parts/week01_tools.py` | LangChain tool 기초 | LLM이 개인 일정 생성, 조회, 삭제 tool을 고릅니다. |
-| Week 2 | `student_parts/week02_structured_output.py` | Structured output | LLM structured output이 자연어 요청을 `StructuredRequest` schema로 바꿉니다. |
-| Week 3 | `student_parts/week03_sqlite_store.py` | SQLite persistence | LLM이 저장/조회 의도를 판단하고 SQLite tool을 호출합니다. |
-| Week 4 | `student_parts/week04_agentic_rag.py` | Agentic RAG | LLM이 Chroma와 SQLite 검색 tool을 조합해 근거를 만듭니다. |
-| Week 5 | `student_parts/week05_mcp_sqlite.py`, `mcp_server/sqlite_mcp_server.py` | MCP tool 연결 | LLM이 외부 대화 검색, 메시지 로드, 일정 추출 MCP tool을 조합합니다. |
-| Week 6 | `student_parts/week06_subagents.py` | Supervisor / sub-agent | `nana_agent`, `kana_agent`가 prompt-driven tool delegation으로 전체 주차 tool chain을 구성합니다. |
+| Week 1 | `student_parts/week01_wake_up_nana.py` | LangChain tool 기초 | `week01_tools()`가 개인 일정 생성, 조회, 삭제 tool을 공개합니다. |
+| Week 2 | `student_parts/week02_structure_natural_language_requests.py` | Structured output | `week02_tools()`가 Week 1 도구에 structured output tool을 누적합니다. |
+| Week 3 | `student_parts/week03_build_nanas_logbook.py` | SQLite persistence | `week03_tools()`가 Week 1-2 도구에 SQLite 저장/조회/삭제 tool을 누적합니다. |
+| Week 4 | `student_parts/week04_retrieve_nanas_memory.py` | Agentic RAG | `week04_tools()`가 Week 1-3 도구에 Chroma/SQLite 검색 tool을 누적합니다. |
+| Week 5 | `student_parts/week05_load_kanas_past_conversations.py`, `mcp_server/sqlite_mcp_server.py` | MCP tool 연결 | `week05_tools()`가 Week 1-4 도구에 외부 대화/일정 추출 tool을 누적합니다. |
+| Week 6 | `student_parts/week06_kanamate_decides_schedule.py` | Supervisor / sub-agent | `nana_agent`, `kana_agent`가 이전 주차 tool 목록을 import해 prompt-driven delegation을 구성합니다. |
 
-주차가 올라갈수록 앞 주차의 결과를 재사용합니다. 예를 들어 Week 6의 `kana_agent`는 Week 5의 외부 일정 검색 결과를 사용하고, `nana_agent`는 Week 1/3의 개인 일정 생성과 저장 흐름을 사용합니다.
+주차가 올라갈수록 앞 주차의 결과를 재사용합니다. Week 1은 단독 구현이고, Week 2는 Week 1 도구를 포함하며, Week 3은 Week 1-2 도구를 포함하는 식으로 누적됩니다. 최종 Week 6의 `kana_agent`는 Week 5의 외부 일정 검색 결과를 사용하고, `nana_agent`는 Week 1/3/4의 개인 일정 생성, 저장, 검색 흐름을 사용합니다.
 
 각 주차는 2차시로 운영합니다. 1차시는 기준 구현을 따라가고, 2차시는 payload, trace, test를 읽으며 결과를 확인한 뒤 작은 확장 미션을 정합니다. 자세한 운영안은 [CURRICULUM.md](CURRICULUM.md)를 봅니다.
 

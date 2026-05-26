@@ -33,20 +33,25 @@ KANANA_LLM_ASSIST=1
 
 ## 주차별 구현 포인트
 
-- Week 1: `student_parts/week01_tools.py`
+- Week 1: `student_parts/week01_wake_up_nana.py`
   - `personal_create_schedule`, `personal_list_schedules`, `personal_delete_schedule`
   - 생성 tool은 DB 저장 도구에 바로 넘길 수 있는 `structured_request`를 함께 반환합니다.
   - 검증은 개별 tool을 직접 호출하기보다 하네스 프롬프트를 채팅 런타임에 넣고 LLM이 어떤 tool을 골랐는지 trace를 확인하는 방식이 기본입니다.
-- Week 2: `student_parts/week02_structured_output.py`
+- Week 2: `student_parts/week02_structure_natural_language_requests.py`
   - LLM structured output + Pydantic `StructuredRequest`
-- Week 3: `student_parts/week03_sqlite_store.py`
+  - `week02_tools()`는 Week 1 도구에 `extract_schedule_request`를 누적해 반환합니다.
+- Week 3: `student_parts/week03_build_nanas_logbook.py`
   - LLM이 저장/조회 의도를 판단하고 SQLite tool로 structured output을 저장/조회
-- Week 4: `student_parts/week04_agentic_rag.py`
+  - `week03_tools()`는 Week 1-2 도구와 SQLite 저장/조회/삭제 도구를 함께 노출합니다.
+- Week 4: `student_parts/week04_retrieve_nanas_memory.py`
   - LLM이 ChromaDB 개인 참고자료와 SQLite structured data 검색 tool을 조합
-- Week 5: `student_parts/week05_mcp_sqlite.py`, `mcp_server/sqlite_mcp_server.py`
+  - `week04_tools()`는 Week 1-3 도구에 RAG 도구를 누적합니다.
+- Week 5: `student_parts/week05_load_kanas_past_conversations.py`, `mcp_server/sqlite_mcp_server.py`
   - LLM이 MCP SQLite 이전 대화 검색, 메시지 로드, 일정 추출 tool을 조합
-- Week 6: `student_parts/week06_subagents.py`
+  - `week05_tools()`는 Week 1-4 도구에 외부 SQLite/MCP 일정 도구를 누적합니다.
+- Week 6: `student_parts/week06_kanamate_decides_schedule.py`
   - prompt-driven supervisor, `nana_agent`, `kana_agent`, tool 기반 sub-agent
+  - Week 6 파일은 이전 주차 구현을 다시 작성하지 않고 Week 1-5 도구를 import해 sub-agent tool 목록을 조립합니다.
 
 각 수강생 구현 구간은 `# [WEEK NN][STUDENT TODO]` 주석으로 표시했고, 바로 아래에 실행 가능한 `# [REFERENCE ANSWER]` 코드를 넣었습니다.
 

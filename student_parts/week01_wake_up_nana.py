@@ -108,6 +108,12 @@ def personal_delete_schedule(schedule_id: str) -> str:
     )
 
 
+def week01_tools() -> list[Any]:
+    """1주차에서 직접 구현한 개인 일정 CRUD 도구 목록입니다."""
+
+    return [personal_create_schedule, personal_list_schedules, personal_delete_schedule]
+
+
 def list_personal_schedule_dicts(date_from: str | None = None, date_to: str | None = None) -> list[dict[str, Any]]:
     """6주차 시간 후보 계산에서 사용하는 비-도구 헬퍼입니다."""
 
