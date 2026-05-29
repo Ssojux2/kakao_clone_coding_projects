@@ -7,7 +7,7 @@
 | 경로 | 한 줄 역할 |
 | --- | --- |
 | `app.py` | Gradio 기반 채팅 UI 진입점입니다. |
-| `CURRICULUM.md` | 6주 / 12차시 수업 운영안과 확장 미션을 정리합니다. |
+| `CURRICULUM.md` | 6주 / 총 12회 수업의 주차별 미션 운영안을 정리합니다. |
 | `fixed/agent_runtime.py` | 대화 저장과 prompt-driven LangChain agent 실행을 담당하는 얇은 런타임입니다. |
 | `student_parts/` | 수강생이 주차별로 구현 흐름을 확인하고 수정하는 핵심 폴더입니다. |
 | `fixed/stores.py` | SQLite, 외부 대화 DB, Chroma 개인 참고자료 저장소를 제공합니다. |
@@ -15,30 +15,7 @@
 
 ## 전체 실행 흐름
 
-```mermaid
-flowchart TD
-    A["사용자 입력"] --> B["app.py<br>Gradio 채팅 UI"]
-    B --> C["AgentRuntime<br>fixed/agent_runtime.py"]
-    C --> S["LangChain supervisor prompt<br>build_langchain_supervisor_agent"]
-    O["golden_cases.py<br>Prompt harness examples"] --> S
-    S -->|"tool call"| N["nana_agent<br>personal sub-agent"]
-    S -->|"tool call"| K["kana_agent<br>group sub-agent"]
-    N --> D["Week 1<br>Personal schedule tools"]
-    N --> E["Week 2<br>Structured output tool"]
-    N --> F["Week 3<br>SQLite persistence"]
-    N --> G["Week 4<br>Agentic RAG"]
-    K --> E
-    K --> H["Week 5<br>MCP SQLite tools"]
-    K --> I["Week 6<br>Availability/proposal tools"]
-    D --> J["data/kanana_app.sqlite3"]
-    E --> J
-    F --> J
-    G --> J
-    G --> CH["data/chroma/"]
-    H --> L["data/kanana_external_people.sqlite3"]
-    C --> M["Trace payload"]
-    M --> U["앱의 상세 탭"]
-```
+![Kanana Schedule Agent 전체 실행 흐름](static/project_overview_flow.svg)
 
 메인 채팅 화면의 런타임은 주차나 tool을 고르지 않습니다. `.env`에 `OPENAI_API_KEY`가 있으면 LangChain supervisor agent가 사용자 프롬프트와 `golden_cases.py`의 하네스 예시를 읽고 `nana_agent` 또는 `kana_agent` tool을 직접 호출합니다. 각 sub-agent도 자기 prompt와 tool 목록을 기준으로 structured output, 일정 CRUD, SQLite 저장/조회, RAG 검색, MCP 검색, 그룹 일정 제안을 수행합니다. 코드가 의미 판단을 선점하지 않고, 저장소와 MCP는 LLM이 고른 tool 호출을 실행하는 얇은 실행 계층으로 둡니다. `run_golden.py`는 API key 없이도 하네스 프롬프트가 agent prompt와 tool wiring에 연결되어 있는지 검증합니다.
 
@@ -47,7 +24,7 @@ flowchart TD
 | 경로 | 역할 | 수강생이 봐야 할 포인트 | 직접 수정 여부 |
 | --- | --- | --- | --- |
 | `README.md` | 실행법, 환경 변수, 검증 명령 안내 | 프로젝트를 처음 실행할 때 먼저 확인합니다. | 보통 수정하지 않음 |
-| `CURRICULUM.md` | 6주 / 12차시 수업 계획 | 각 차시의 목표, 활동, 확장 미션을 확인합니다. | 문서 개선 시 수정 가능 |
+| `CURRICULUM.md` | 6주 / 총 12회 수업 계획 | 각 Week의 미션, 코드 흐름, 검증 포인트를 확인합니다. | 문서 개선 시 수정 가능 |
 | `PROJECT_OVERVIEW.md` | 전체 구조와 학습 흐름 안내 | 파일 간 관계를 파악할 때 봅니다. | 문서 개선 시 수정 가능 |
 | `app.py` | Gradio UI, 채팅/상세 탭, trace 표시 | 입력이 런타임으로 들어가고 결과가 화면에 나오는 흐름을 확인합니다. | 보통 수정하지 않음 |
 | `student_parts/` | Week 1-6 수강생 구현 파일 | `# [WEEK NN][STUDENT TODO]` 주석 아래 구현 흐름을 봅니다. | 예 |
@@ -75,7 +52,7 @@ flowchart TD
 
 주차가 올라갈수록 앞 주차의 결과를 재사용합니다. Week 1은 단독 구현이고, Week 2는 Week 1 도구를 포함하며, Week 3은 Week 1-2 도구를 포함하는 식으로 누적됩니다. 최종 Week 6의 `kana_agent`는 Week 5의 외부 일정 검색 결과를 사용하고, `nana_agent`는 Week 1/3/4의 개인 일정 생성, 저장, 검색 흐름을 사용합니다.
 
-각 주차는 2차시로 운영합니다. 1차시는 기준 구현을 따라가고, 2차시는 payload, trace, test를 읽으며 결과를 확인한 뒤 작은 확장 미션을 정합니다. 자세한 운영안은 [CURRICULUM.md](CURRICULUM.md)를 봅니다.
+각 주차는 실제 Week 코드가 공개하는 tool, payload, 저장소, trace 흐름을 하나의 미션으로 다룹니다. 자세한 운영안은 [CURRICULUM.md](CURRICULUM.md)를 봅니다.
 
 ## 처음 보는 수강생의 추천 탐색 순서
 
