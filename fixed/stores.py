@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import math
 import sqlite3
 import uuid
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
+from fixed.config import CONFIG
 from fixed.runtime_clock import app_started_at_iso, next_weekday_iso
 
 
@@ -37,18 +33,36 @@ def decode_schedule_row(row: dict[str, Any]) -> dict[str, Any]:
     return decoded
 
 
-class AppSQLiteStore:
-    """대화와 3주차 구조화 출력 결과를 저장하는 SQLite 저장소입니다."""
+SCHEDULE_COLUMNS = (
+    "schedule_id, request_id, owner, title, date, start_time, end_time, "
+    "attendees_json, source, created_at"
+)
+
+
+class SQLiteFileStore:
+    """파일 기반 SQLite 저장소가 공유하는 경로 준비와 연결 설정입니다."""
 
     def __init__(self, path: Path):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.initialize()
 
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
+
+
+class AppSQLiteStore(SQLiteFileStore):
+    """앱 내부 DB 저장소입니다.
+
+    대화 로그, Week 3 structured output, 정규화된 개인 일정/할 일/알림을 같은
+    SQLite 파일에 보관합니다. Week 4+ 도구는 이 저장소의 schedules 테이블을
+    RAG 후보 데이터로 사용합니다.
+    """
+
+    def __init__(self, path: Path):
+        super().__init__(path)
+        self.initialize()
 
     def initialize(self) -> None:
         with self.connect() as conn:
@@ -118,6 +132,8 @@ class AppSQLiteStore:
                 );
                 """
             )
+
+    # Conversation history
 
     def create_conversation(self, title: str = "새 대화") -> dict[str, Any]:
         conversation_id = new_id("conv")
@@ -193,6 +209,8 @@ class AppSQLiteStore:
             conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
             cur = conn.execute("DELETE FROM conversations WHERE conversation_id = ?", (conversation_id,))
         return {"conversation_id": conversation_id, "deleted": cur.rowcount > 0}
+
+    # Week 3 structured output persistence
 
     def save_structured_request(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_id = new_id("req")
@@ -273,6 +291,8 @@ class AppSQLiteStore:
 
         return {"request_id": request_id, "kind": kind, "saved_rows": saved_rows}
 
+    # Structured request lookup
+
     def list_saved_requests(
         self,
         kind: str | None = None,
@@ -326,12 +346,13 @@ class AppSQLiteStore:
         with self.connect() as conn:
             return rows_to_dicts(conn.execute(sql, params))
 
+    # Schedule lookup and deletion
+
     def list_schedules(self, limit: int = 12) -> list[dict[str, Any]]:
         with self.connect() as conn:
             cur = conn.execute(
-                """
-                SELECT schedule_id, request_id, owner, title, date, start_time, end_time,
-                       attendees_json, source, created_at
+                f"""
+                SELECT {SCHEDULE_COLUMNS}
                 FROM schedules
                 ORDER BY (date IS NULL), date ASC, (start_time IS NULL), start_time ASC, created_at DESC
                 LIMIT ?
@@ -373,9 +394,8 @@ class AppSQLiteStore:
         if time_unspecified:
             where.append("(start_time IS NULL OR start_time = '' OR start_time = '미정')")
 
-        sql = """
-            SELECT schedule_id, request_id, owner, title, date, start_time, end_time,
-                   attendees_json, source, created_at
+        sql = f"""
+            SELECT {SCHEDULE_COLUMNS}
             FROM schedules
         """
         if where:
@@ -390,9 +410,8 @@ class AppSQLiteStore:
     def delete_schedule(self, schedule_id: str) -> dict[str, Any] | None:
         with self.connect() as conn:
             row = conn.execute(
-                """
-                SELECT schedule_id, request_id, owner, title, date, start_time, end_time,
-                       attendees_json, source, created_at
+                f"""
+                SELECT {SCHEDULE_COLUMNS}
                 FROM schedules
                 WHERE schedule_id = ?
                 """,
@@ -446,9 +465,8 @@ class AppSQLiteStore:
 
         with self.connect() as conn:
             cur = conn.execute(
-                """
-                SELECT schedule_id, request_id, owner, title, date, start_time, end_time,
-                       attendees_json, source, created_at
+                f"""
+                SELECT {SCHEDULE_COLUMNS}
                 FROM schedules
                 ORDER BY created_at DESC
                 """
@@ -465,19 +483,17 @@ class AppSQLiteStore:
         return [decode_schedule_row(row) for row in deleted_rows]
 
 
-class ExternalPeopleSQLiteStore:
-    """5주차 MCP 서버와 6주차 Kana 에이전트가 사용하는 외부 인물 SQLite 저장소입니다."""
+class ExternalPeopleSQLiteStore(SQLiteFileStore):
+    """외부 멤버 대화/일정 샘플 DB 저장소입니다.
+
+    Week 5 MCP 도구와 Week 6 Kana agent가 여러 사람의 이전 대화와 바쁜 시간을
+    조회할 때 사용합니다. 앱 내부 DB와 분리된 SQLite 파일을 씁니다.
+    """
 
     def __init__(self, path: Path):
-        self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        super().__init__(path)
         self.initialize()
         self.seed()
-
-    def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
-        return conn
 
     def initialize(self) -> None:
         with self.connect() as conn:
@@ -623,81 +639,110 @@ class ExternalPeopleSQLiteStore:
             return rows_to_dicts(cur)
 
 
-class HashEmbeddingFunction:
-    """오프라인 수업 환경을 위한 간단한 ChromaDB 해시 임베딩 함수입니다."""
+class OpenAIEmbeddingFunction:
+    """ChromaDB가 호출할 수 있는 OpenAI embeddings adapter입니다."""
 
-    def __init__(self, dimensions: int = 64):
-        self.dimensions = dimensions
+    def __init__(self, api_key: str | None, model: str):
+        self.api_key = api_key
+        self.model = model
+        self._client: Any | None = None
 
     def name(self) -> str:
-        return "kanana_hash_embedding"
+        return f"openai_{self.model}"
 
     def is_legacy(self) -> bool:
-        # 이 수업용 임베딩 함수는 의도적으로 로컬에서 가볍게 동작합니다.
-        # ChromaDB가 등록/설정 메서드를 기대하지 않도록 레거시 방식으로 표시합니다.
+        # ChromaDB의 custom embedding function 호환 경로를 사용합니다.
         return True
 
-    def __call__(self, input: list[str]) -> list[np.ndarray[Any, np.dtype[np.float32]]]:
-        embeddings: list[np.ndarray[Any, np.dtype[np.float32]]] = []
-        for document in input:
-            vector = np.zeros(self.dimensions, dtype=np.float32)
-            for token in document.lower().replace(",", " ").replace(".", " ").split():
-                digest = hashlib.sha256(token.encode("utf-8")).digest()
-                index = int.from_bytes(digest[:2], "big") % self.dimensions
-                vector[index] += 1.0
-            norm = math.sqrt(float(np.dot(vector, vector))) or 1.0
-            embeddings.append(vector / norm)
-        return embeddings
+    def _openai_client(self) -> Any:
+        if not self.api_key:
+            raise RuntimeError("OPENAI_API_KEY가 필요합니다. .env에 키를 추가한 뒤 다시 실행하세요.")
+        if self._client is None:
+            from openai import OpenAI
 
-    def embed_query(self, input: list[str]) -> list[np.ndarray[Any, np.dtype[np.float32]]]:
+            self._client = OpenAI(api_key=self.api_key)
+        return self._client
+
+    def __call__(self, input: list[str]) -> list[list[float]]:
+        response = self._openai_client().embeddings.create(model=self.model, input=input)
+        return [item.embedding for item in response.data]
+
+    def embed_query(self, input: list[str]) -> list[list[float]]:
         return self(input)
 
-    def embed_documents(self, input: list[str]) -> list[np.ndarray[Any, np.dtype[np.float32]]]:
+    def embed_documents(self, input: list[str]) -> list[list[float]]:
         return self(input)
 
 
 class PersonalReferenceStore:
-    """4주차 개인 참고자료를 저장하는 ChromaDB 기반 저장소입니다."""
+    """Week 4 개인 참고자료 RAG 저장소입니다.
+
+    참고자료는 ChromaDB에 저장하고, 벡터는 `.env`의 OpenAI embedding 설정으로
+    생성합니다. OPENAI_API_KEY가 없으면 앱 import는 가능하지만 실제 add/query
+    시점에 명확한 오류를 냅니다.
+    """
+
+    COLLECTION_NAME = "kanana_personal_references_openai"
+    DEFAULT_REFERENCES = [
+        {
+            "id": "ref_focus",
+            "title": "집중 회의 선호",
+            "content": "나는 오전 10시에서 12시 사이에 집중도가 높아서 중요한 회의는 오전 중반을 선호한다.",
+            "tags": ["preference", "meeting"],
+        },
+        {
+            "id": "ref_lunch",
+            "title": "점심 시간 보호",
+            "content": "점심 시간 12:00-13:00은 되도록 회의 없이 비워둔다.",
+            "tags": ["preference", "lunch"],
+        },
+        {
+            "id": "ref_sync",
+            "title": "팀 싱크 방식",
+            "content": "팀 싱크는 60분 이하로 잡고 회의 전날 아젠다를 공유하면 좋다.",
+            "tags": ["team", "meeting"],
+        },
+    ]
 
     def __init__(self, chroma_dir: Path):
         import chromadb
 
+        self.chroma_dir = chroma_dir
         chroma_dir.mkdir(parents=True, exist_ok=True)
         client = chromadb.PersistentClient(path=str(chroma_dir))
         self.collection = client.get_or_create_collection(
-            "kanana_personal_references",
-            embedding_function=HashEmbeddingFunction(),
-            metadata={"description": "Kanana course personal references"},
+            self.COLLECTION_NAME,
+            embedding_function=OpenAIEmbeddingFunction(
+                api_key=CONFIG.openai_api_key,
+                model=CONFIG.openai_embedding_model,
+            ),
+            metadata={
+                "description": "Kanana course personal references",
+                "embedding_provider": "openai",
+                "embedding_model": CONFIG.openai_embedding_model,
+            },
         )
-        self.seed()
+        if CONFIG.has_openai_key:
+            self.seed()
+
+    def backend_info(self) -> dict[str, Any]:
+        """Week 4가 사용하는 vector store와 embedding backend를 설명합니다."""
+
+        return {
+            "vector_store": "chromadb",
+            "embedding_provider": "openai",
+            "embedding_model": CONFIG.openai_embedding_model,
+            "collection_name": self.COLLECTION_NAME,
+            "chroma_dir": str(self.chroma_dir),
+        }
 
     def seed(self) -> None:
         if self.collection.count():
             return
-        references = [
-            {
-                "id": "ref_focus",
-                "title": "집중 회의 선호",
-                "content": "나는 오전 10시에서 12시 사이에 집중도가 높아서 중요한 회의는 오전 중반을 선호한다.",
-                "tags": ["preference", "meeting"],
-            },
-            {
-                "id": "ref_lunch",
-                "title": "점심 시간 보호",
-                "content": "점심 시간 12:00-13:00은 되도록 회의 없이 비워둔다.",
-                "tags": ["preference", "lunch"],
-            },
-            {
-                "id": "ref_sync",
-                "title": "팀 싱크 방식",
-                "content": "팀 싱크는 60분 이하로 잡고 회의 전날 아젠다를 공유하면 좋다.",
-                "tags": ["team", "meeting"],
-            },
-        ]
         self.collection.add(
-            ids=[item["id"] for item in references],
-            documents=[item["content"] for item in references],
-            metadatas=[{"title": item["title"], "tags": ",".join(item["tags"])} for item in references],
+            ids=[item["id"] for item in self.DEFAULT_REFERENCES],
+            documents=[item["content"] for item in self.DEFAULT_REFERENCES],
+            metadatas=[{"title": item["title"], "tags": ",".join(item["tags"])} for item in self.DEFAULT_REFERENCES],
         )
 
     def add_personal_reference(self, title: str, content: str, tags: list[str] | None = None) -> dict[str, Any]:
@@ -707,7 +752,13 @@ class PersonalReferenceStore:
             documents=[content],
             metadatas=[{"title": title, "tags": ",".join(tags or [])}],
         )
-        return {"reference_id": reference_id, "title": title, "content": content, "tags": tags or []}
+        return {
+            "reference_id": reference_id,
+            "title": title,
+            "content": content,
+            "tags": tags or [],
+            "backend": self.backend_info(),
+        }
 
     def search_personal_references(self, query: str, limit: int = 3) -> list[dict[str, Any]]:
         result = self.collection.query(query_texts=[query], n_results=limit)

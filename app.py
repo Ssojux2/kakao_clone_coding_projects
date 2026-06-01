@@ -221,7 +221,7 @@ def build_demo() -> gr.Blocks:
             f"""
             <div class="kanana-topbar">
               <div class="brand-lockup">
-                <span>Smart Schedule Agent</span>
+                <span>Smart Schedule Agent · Week {CONFIG.active_week}</span>
               </div>
             </div>
             """

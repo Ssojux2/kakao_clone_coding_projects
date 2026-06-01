@@ -12,6 +12,7 @@
 | `student_parts/` | 수강생이 주차별로 구현 흐름을 확인하고 수정하는 핵심 폴더입니다. |
 | `fixed/stores.py` | SQLite, 외부 대화 DB, Chroma 개인 참고자료 저장소를 제공합니다. |
 | `golden_cases.py`, `tests/`, `run_golden.py` | 프롬프트 하네스와 전체 시나리오가 기대대로 동작하는지 검증합니다. |
+| `scripts/make_student_distribution.py` | 강사용 기준본에서 학생용 TODO 배포본을 생성합니다. |
 
 ## 전체 실행 흐름
 
@@ -29,7 +30,7 @@
 | `app.py` | Gradio UI, 채팅/상세 탭, trace 표시 | 입력이 런타임으로 들어가고 결과가 화면에 나오는 흐름을 확인합니다. | 보통 수정하지 않음 |
 | `student_parts/` | Week 1-6 수강생 구현 파일 | `# [WEEK NN][STUDENT TODO]` 주석 아래 구현 흐름을 봅니다. | 예 |
 | `fixed/agent_runtime.py` | prompt-driven agent 런타임 | 채팅 입력이 supervisor agent로 들어가고 trace가 수집되는 흐름을 확인합니다. | 보통 수정하지 않음 |
-| `fixed/stores.py` | SQLite/Chroma 저장소 구현 | 데이터가 어디에 저장되고 어떻게 조회되는지 확인합니다. | 보통 수정하지 않음 |
+| `fixed/stores.py` | SQLite/Chroma 저장소 구현 | 테이블 구조와 저장소 API를 참고합니다. Week 실습 구현은 보통 `student_parts/`에서 합니다. | 보통 수정하지 않음 |
 | `fixed/config.py` | `.env`, DB 경로, 모델 설정 | 실행 환경 설정이 어디에서 로드되는지 확인합니다. | 필요 시 강사와 함께 수정 |
 | `fixed/trace.py` | tool call/result trace 수집 | 상세 탭에 표시되는 trace 구조를 확인합니다. | 보통 수정하지 않음 |
 | `mcp_server/` | Week 5 MCP SQLite server | 외부 대화 검색 tool이 MCP로 노출되는 방식을 봅니다. | Week 5 심화 시 수정 가능 |
@@ -38,6 +39,7 @@
 | `tests/` | pytest 하네스/agent 테스트 | 프롬프트 하네스와 prompt-driven agent trace 형식을 확인합니다. | 테스트 추가 시 수정 가능 |
 | `run_golden.py`, `golden_cases.py` | 전체 golden scenario 검증 | 핵심 프롬프트 하네스가 통과하는지 확인합니다. | 보통 수정하지 않음 |
 | `run.sh` | 설치, 실행, 테스트 명령 래퍼 | 수업 중 사용하는 표준 실행 명령을 확인합니다. | 보통 수정하지 않음 |
+| `scripts/` | 수업 운영 보조 스크립트 | 학생 배포본 생성 같은 강사용 작업을 수행합니다. | 강사만 수정 |
 
 ## 주차별 학습 흐름
 
@@ -46,9 +48,9 @@
 | Week 1 | `student_parts/week01_wake_up_nana.py` | LangChain tool 기초 | `week01_tools()`가 개인 일정 생성, 조회, 삭제 tool을 공개합니다. |
 | Week 2 | `student_parts/week02_structure_natural_language_requests.py` | Structured output | `week02_tools()`가 Week 1 도구에 structured output tool을 누적합니다. |
 | Week 3 | `student_parts/week03_build_nanas_logbook.py` | SQLite persistence | `week03_tools()`가 Week 1-2 도구에 SQLite 저장/조회/삭제 tool을 누적합니다. |
-| Week 4 | `student_parts/week04_retrieve_nanas_memory.py` | Agentic RAG | `week04_tools()`가 Week 1-3 도구에 Chroma/SQLite 검색 tool을 누적합니다. |
+| Week 4 | `student_parts/week04_retrieve_nanas_memory.py` | Agentic RAG | `week04_tools()`가 Week 1-3 도구에 최소 RAG 검색 tool인 `search_nana_memory`를 누적합니다. |
 | Week 5 | `student_parts/week05_load_kanas_past_conversations.py`, `mcp_server/sqlite_mcp_server.py` | MCP tool 연결 | `week05_tools()`가 Week 1-4 도구에 외부 대화/일정 추출 tool을 누적합니다. |
-| Week 6 | `student_parts/week06_kanamate_decides_schedule.py` | Supervisor / sub-agent | `nana_agent`, `kana_agent`가 이전 주차 tool 목록을 import해 prompt-driven delegation을 구성합니다. |
+| Week 6 | `student_parts/week06_kanamate_decides_schedule.py` | Supervisor / sub-agent | `nana_agent`, `kana_agent`가 이전 주차 tool 목록을 import하고, `find_common_available_slots`와 `propose_group_schedule`로 그룹 일정 결정을 완성합니다. |
 
 주차가 올라갈수록 앞 주차의 결과를 재사용합니다. Week 1은 단독 구현이고, Week 2는 Week 1 도구를 포함하며, Week 3은 Week 1-2 도구를 포함하는 식으로 누적됩니다. 최종 Week 6의 `kana_agent`는 Week 5의 외부 일정 검색 결과를 사용하고, `nana_agent`는 Week 1/3/4의 개인 일정 생성, 저장, 검색 흐름을 사용합니다.
 
@@ -59,9 +61,11 @@
 1. [README.md](README.md)에서 실행 방법과 환경 변수를 확인합니다.
 2. 이 문서의 "30초 요약"과 "전체 실행 흐름"을 먼저 봅니다.
 3. `student_parts/weekXX_*.py` 파일을 열고 `# [WEEK NN][STUDENT TODO]` 주석을 찾습니다.
-4. 각 TODO 바로 아래의 `# [REFERENCE ANSWER]` 코드를 보며 기대 구현 방향을 확인합니다.
-5. `./run.sh --test` 또는 `./run.sh --golden`으로 현재 구현이 통과하는지 확인합니다.
+4. `./run.sh --test-week N`으로 현재 주차 구현이 통과하는지 확인합니다.
+5. `./run.sh --test` 또는 `./run.sh --golden`으로 전체 기준본이 통과하는지 확인합니다.
 6. 앱을 실행한 뒤 "상세" 탭에서 마지막 Agent 실행 trace를 확인합니다.
+
+Week 4의 개인 참고자료 add/search는 ChromaDB collection과 OpenAI embedding adapter를 사용하므로 `.env`에 `OPENAI_API_KEY`가 있어야 실제 reference add/search가 동작합니다. `OPENAI_EMBEDDING_MODEL`을 바꾸면 새 embedding collection 기준으로 참고자료를 다시 쌓아야 할 수 있습니다. Week 4 tool 결과의 `reference_backend`에서 vector store와 embedding model을 확인할 수 있습니다.
 
 ## 자주 쓰는 명령
 
@@ -72,16 +76,34 @@
 Gradio 앱을 실행합니다.
 
 ```bash
+./run.sh --week 3
+```
+
+Week 3까지의 도구만 열린 상태로 앱을 실행합니다.
+
+```bash
 ./run.sh --test
 ```
 
 pytest 단위 테스트를 실행한 뒤 golden scenario를 이어서 확인합니다.
 
 ```bash
+./run.sh --test-week 3
+```
+
+Week 3 테스트와 Week 3까지의 golden wiring만 확인합니다.
+
+```bash
 ./run.sh --golden
 ```
 
 수업 검증용 prompt harness wiring만 실행합니다.
+
+```bash
+./run.sh --make-student-copy
+```
+
+`dist/kanana_student`에 핵심 구현부가 TODO로 바뀐 학생용 배포본을 생성합니다.
 
 ## 읽는 팁
 

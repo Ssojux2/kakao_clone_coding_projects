@@ -43,11 +43,6 @@ def personal_create_schedule(
 ) -> str:
     """Nana의 개인 일정을 생성하고 저장된 일정 페이로드를 반환합니다."""
 
-    # [1주차][학생 구현]
-    # 사용자의 자연어 요청에서 추출된 title/date/start_time/end_time/attendees를
-    # 실제 앱이 읽을 수 있는 일정 페이로드로 저장하고, DB 저장 도구에 넘길 structured output도 반환하세요.
-    #
-    # [참고 답안]
     schedule = {
         "id": new_id("personal"),
         "owner": "me",
@@ -73,17 +68,11 @@ def personal_create_schedule(
 def personal_list_schedules(date_from: str | None = None, date_to: str | None = None) -> str:
     """선택한 시작일과 종료일 범위에 포함되는 Nana의 개인 일정을 조회합니다."""
 
-    # [1주차][학생 구현]
-    # date_from/date_to가 들어오면 해당 기간에 포함되는 개인 일정만 반환하세요.
-    #
-    # [참고 답안]
-    schedules = []
-    for schedule in PERSONAL_SCHEDULES:
-        if date_from and schedule["date"] < date_from:
-            continue
-        if date_to and schedule["date"] > date_to:
-            continue
-        schedules.append(schedule)
+    schedules = [
+        schedule
+        for schedule in PERSONAL_SCHEDULES
+        if (not date_from or schedule["date"] >= date_from) and (not date_to or schedule["date"] <= date_to)
+    ]
     return _json({"ok": True, "tool_name": "personal_list_schedules", "schedules": schedules})
 
 
@@ -91,10 +80,6 @@ def personal_list_schedules(date_from: str | None = None, date_to: str | None = 
 def personal_delete_schedule(schedule_id: str) -> str:
     """일정 ID에 해당하는 개인 일정을 삭제합니다."""
 
-    # [1주차][학생 구현]
-    # schedule_id와 일치하는 일정만 삭제하고, 삭제 성공 여부를 페이로드로 반환하세요.
-    #
-    # [참고 답안]
     before = len(PERSONAL_SCHEDULES)
     PERSONAL_SCHEDULES[:] = [schedule for schedule in PERSONAL_SCHEDULES if schedule["id"] != schedule_id]
     deleted = len(PERSONAL_SCHEDULES) != before

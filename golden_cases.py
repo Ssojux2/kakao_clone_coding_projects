@@ -30,7 +30,7 @@ GOLDEN_CASES = [
         "week": 4,
         "input": "내 회의 선호 참고자료와 저장된 일정을 같이 검색해줘",
         "expected_agent": "nana_agent",
-        "expected_tool": "search_personal_references",
+        "expected_tool": "search_nana_memory",
     },
     {
         "id": "week5_mcp_sqlite",
@@ -45,6 +45,7 @@ GOLDEN_CASES = [
         "input": "팀원 A/B/C와 다음 주 회의 시간을 잡아줘",
         "expected_agent": "kana_agent",
         "expected_tool": "propose_group_schedule",
+        "expected_tools": ["collect_member_schedules", "find_common_available_slots", "propose_group_schedule"],
     },
     {
         "id": "week6_nana_personal",
@@ -69,16 +70,19 @@ def find_case_by_input(prompt: str) -> dict[str, Any] | None:
 def harness_prompt_examples() -> list[dict[str, Any]]:
     """프롬프트와 문서 화면에서 함께 사용하는 압축된 하네스 예시를 반환합니다."""
 
-    return [
-        {
+    examples: list[dict[str, Any]] = []
+    for case in GOLDEN_CASES:
+        example = {
             "id": case["id"],
             "week": case["week"],
             "input": case["input"],
             "expected_agent": case.get("expected_agent"),
             "expected_tool": case["expected_tool"],
         }
-        for case in GOLDEN_CASES
-    ]
+        if case.get("expected_tools"):
+            example["expected_tools"] = case["expected_tools"]
+        examples.append(example)
+    return examples
 
 
 def sample_prompts() -> list[str]:

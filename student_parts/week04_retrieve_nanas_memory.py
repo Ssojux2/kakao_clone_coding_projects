@@ -14,73 +14,157 @@ REFERENCE_STORE = PersonalReferenceStore(CONFIG.chroma_dir)
 SQLITE_STORE = AppSQLiteStore(CONFIG.app_db_path)
 
 
+def _safe_limit(limit: int, default: int = 5, maximum: int = 50) -> int:
+    try:
+        value = int(limit)
+    except (TypeError, ValueError):
+        value = default
+    return max(1, min(value, maximum))
+
+
+def _decode_attendees(raw_attendees: str | None) -> list[str]:
+    try:
+        decoded = json.loads(raw_attendees or "[]")
+    except Exception:
+        return []
+    return decoded if isinstance(decoded, list) else []
+
+
+def _reference_backend_info() -> dict[str, Any]:
+    return REFERENCE_STORE.backend_info()
+
+
 @tool
 def add_personal_reference(title: str, content: str, tags: list[str] | None = None) -> str:
     """개인 참고자료를 ChromaDB에 추가합니다."""
 
-    # [4주차][학생 구현]
-    # 개인 참고자료를 ChromaDB 컬렉션에 문서와 메타데이터로 저장하세요.
-    #
-    # [참고 답안]
     item = REFERENCE_STORE.add_personal_reference(title=title, content=content, tags=tags or [])
-    return json.dumps({"ok": True, "tool_name": "add_personal_reference", "reference": item}, ensure_ascii=False)
+    return json.dumps(
+        {
+            "ok": True,
+            "tool_name": "add_personal_reference",
+            "reference_backend": _reference_backend_info(),
+            "reference": item,
+        },
+        ensure_ascii=False,
+    )
 
 
 @tool
-def search_personal_references(query: str, limit: int = 3) -> str:
-    """ChromaDB에 저장된 개인 참고자료를 검색합니다."""
+def search_nana_memory(
+    query: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    attendee: str | None = None,
+    limit: int = 5,
+) -> str:
+    """개인 참고자료와 SQLite 저장 일정을 한 번에 검색하고 일정 chunk를 반환합니다."""
 
-    # [4주차][학생 구현]
-    # 사용자의 질문을 검색어로 삼아 ChromaDB에서 관련 참고자료 결과를 반환하세요.
-    #
-    # [참고 답안]
-    hits = REFERENCE_STORE.search_personal_references(query=query, limit=limit)
-    return json.dumps({"ok": True, "tool_name": "search_personal_references", "hits": hits}, ensure_ascii=False)
+    normalized_limit = _safe_limit(limit, default=5, maximum=20)
+    reference_hits = REFERENCE_STORE.search_personal_references(query=query, limit=min(normalized_limit, 5))
 
+    clauses: list[str] = []
+    params: list[Any] = []
+    if query.strip():
+        clauses.append("(title LIKE ? OR date LIKE ? OR start_time LIKE ? OR end_time LIKE ? OR attendees_json LIKE ?)")
+        token = f"%{query.strip()}%"
+        params.extend([token, token, token, token, token])
+    if date_from:
+        clauses.append("date >= ?")
+        params.append(date_from)
+    if date_to:
+        clauses.append("date <= ?")
+        params.append(date_to)
+    if attendee:
+        clauses.append("attendees_json LIKE ?")
+        params.append(f"%{attendee}%")
 
-@tool
-def search_saved_requests(query: str, kind: str | None = None, limit: int = 5) -> str:
-    """SQLite에 저장된 구조화 출력 결과를 검색합니다."""
+    sql = """
+        SELECT schedule_id, request_id, owner, title, date, start_time, end_time,
+               attendees_json, source, created_at
+        FROM schedules
+    """
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += """
+        ORDER BY (date IS NULL), date ASC, (start_time IS NULL), start_time ASC, created_at DESC
+        LIMIT ?
+    """
+    params.append(normalized_limit)
 
-    # [4주차][학생 구현]
-    # ChromaDB 참고자료와 별도로 SQLite에 저장된 structured_requests 행을 검색하세요.
-    #
-    # [참고 답안]
-    hits = SQLITE_STORE.search_saved_requests(query=query, kind=kind, limit=limit)
-    return json.dumps({"ok": True, "tool_name": "search_saved_requests", "hits": hits}, ensure_ascii=False)
+    with SQLITE_STORE.connect() as conn:
+        rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
 
+    schedule_chunks: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        raw_attendees = row.pop("attendees_json", "[]")
+        attendees = _decode_attendees(raw_attendees)
+        schedule_id = row.get("schedule_id") or f"schedule_{index}"
+        start_time = row.get("start_time") or "시간 미정"
+        end_time = row.get("end_time")
+        time_range = f"{start_time}-{end_time}" if end_time else start_time
+        attendee_text = ", ".join(attendees) if attendees else "참석자 미정"
+        date = row.get("date") or "날짜 미정"
+        title = row.get("title") or "제목 없음"
+        schedule_chunks.append(
+            {
+                "chunk_id": f"schedule:{schedule_id}:0",
+                "schedule_id": schedule_id,
+                "title": title,
+                "date": row.get("date"),
+                "time_range": time_range,
+                "attendees": attendees,
+                "content": f"{date} {time_range} | {title} | 참석자: {attendee_text}",
+                "metadata": {
+                    "request_id": row.get("request_id"),
+                    "owner": row.get("owner"),
+                    "source": row.get("source"),
+                    "created_at": row.get("created_at"),
+                },
+            }
+        )
 
-@tool
-def build_rag_context(reference_hits: list[dict[str, Any]], sqlite_hits: list[dict[str, Any]]) -> str:
-    """ChromaDB와 SQLite 검색 결과로 간결한 RAG 문맥을 만듭니다."""
-
-    # [4주차][학생 구현]
-    # ChromaDB 검색 결과와 SQLite 검색 결과를 모델 답변에 첨부하기 좋은 문맥 문자열로 합치세요.
-    #
-    # [참고 답안]
     lines = ["[개인 참고자료]"]
     for hit in reference_hits:
         lines.append(f"- {hit.get('title', '참고자료')}: {hit.get('content')}")
-    lines.append("[SQLite 저장 요청]")
-    for hit in sqlite_hits:
-        title = hit.get("title") or "제목 없음"
-        lines.append(f"- {hit.get('kind')} | {title} | {hit.get('date')} {hit.get('start_time') or ''}")
+    lines.append("[SQLite 일정 chunk]")
+    if not schedule_chunks:
+        lines.append("- 검색된 저장 일정이 없습니다.")
+    for chunk in schedule_chunks:
+        source = (chunk.get("metadata") or {}).get("source") or "unknown"
+        lines.append(f"- {chunk.get('chunk_id')} | {chunk.get('content')} | source={source}")
     context = "\n".join(lines)
-    return json.dumps({"ok": True, "tool_name": "build_rag_context", "context": context}, ensure_ascii=False)
+    return json.dumps(
+        {
+            "ok": True,
+            "tool_name": "search_nana_memory",
+            "reference_backend": _reference_backend_info(),
+            "reference_hits": reference_hits,
+            "schedule_chunks": schedule_chunks,
+            "context": context,
+        },
+        ensure_ascii=False,
+    )
 
 
-def search_personal_references_dict(query: str, limit: int = 3) -> list[dict[str, Any]]:
-    return json.loads(search_personal_references.invoke({"query": query, "limit": limit}))["hits"]
-
-
-def search_saved_requests_dict(query: str, kind: str | None = None, limit: int = 5) -> list[dict[str, Any]]:
-    return json.loads(search_saved_requests.invoke({"query": query, "kind": kind, "limit": limit}))["hits"]
-
-
-def build_rag_context_dict(reference_hits: list[dict[str, Any]], sqlite_hits: list[dict[str, Any]]) -> str:
+def search_nana_memory_dict(
+    query: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    attendee: str | None = None,
+    limit: int = 10,
+) -> dict[str, Any]:
     return json.loads(
-        build_rag_context.invoke({"reference_hits": reference_hits, "sqlite_hits": sqlite_hits})
-    )["context"]
+        search_nana_memory.invoke(
+            {
+                "query": query,
+                "date_from": date_from,
+                "date_to": date_to,
+                "attendee": attendee,
+                "limit": limit,
+            }
+        )
+    )
 
 
 def week04_tools() -> list[Any]:
@@ -89,7 +173,5 @@ def week04_tools() -> list[Any]:
     return [
         *week03_tools(),
         add_personal_reference,
-        search_personal_references,
-        search_saved_requests,
-        build_rag_context,
+        search_nana_memory,
     ]

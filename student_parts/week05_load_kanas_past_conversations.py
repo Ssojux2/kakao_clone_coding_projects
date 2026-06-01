@@ -32,10 +32,6 @@ def search_previous_conversations(
 ) -> str:
     """외부 SQLite 데이터베이스에 저장된 이전 대화를 검색합니다."""
 
-    # [5주차][학생 구현]
-    # 에이전트 코드가 DB를 직접 뒤지지 않고 MCP SQLite 도구를 호출해 이전 대화를 검색하도록 만드세요.
-    #
-    # [참고 답안]
     rows = EXTERNAL_STORE.search_previous_conversations(query=query, member_names=member_names or None, limit=limit)
     return json.dumps({"ok": True, "tool_name": "search_previous_conversations", "rows": rows}, ensure_ascii=False)
 
@@ -44,10 +40,6 @@ def search_previous_conversations(
 def load_conversation_messages(conversation_id: str) -> str:
     """외부 SQLite 데이터베이스에서 특정 이전 대화의 모든 메시지를 불러옵니다."""
 
-    # [5주차][학생 구현]
-    # conversation_id로 외부 SQLite 대화 메시지를 시간순으로 조회하세요.
-    #
-    # [참고 답안]
     rows = EXTERNAL_STORE.load_conversation_messages(conversation_id=conversation_id)
     return json.dumps({"ok": True, "tool_name": "load_conversation_messages", "rows": rows}, ensure_ascii=False)
 
@@ -56,10 +48,6 @@ def load_conversation_messages(conversation_id: str) -> str:
 def extract_schedules_from_history(member_names: list[str], date_from: str, date_to: str) -> str:
     """외부 SQLite 이전 대화에서 멤버별 일정을 추출합니다."""
 
-    # [5주차][학생 구현]
-    # 멤버 이름과 날짜 범위로 외부 SQLite에 저장된 각자의 일정을 추출하세요.
-    #
-    # [참고 답안]
     rows = EXTERNAL_STORE.extract_schedules_from_history(
         member_names=member_names,
         date_from=date_from,

@@ -20,11 +20,6 @@ KNOWN_MEMBERS = ["민준", "서연", "지훈", "유나", "도현", "A", "B", "C"
 class StructuredRequest(BaseModel):
     """LLM structured output으로 추출되는 2주차 요청 스키마입니다."""
 
-    # [2주차][학생 구현]
-    # LLM이 반드시 채워야 하는 출력 필드를 Pydantic 모델로 정의하세요.
-    # 필드를 추가하거나 설명을 바꾸면 LLM이 반환하는 JSON 구조도 함께 바뀝니다.
-    #
-    # [참고 답안]
     kind: RequestKind = Field(description="분류된 요청 종류")
     title: str | None = Field(default=None, description="일정, 할 일, 알림 제목")
     date: str | None = Field(default=None, description="연-월-일(YYYY-MM-DD) 형식 날짜")
@@ -39,11 +34,6 @@ class StructuredRequest(BaseModel):
 def structured_output_system_prompt() -> str:
     """2주차 LLM structured output 에이전트가 따르는 시스템 프롬프트입니다."""
 
-    # [2주차][학생 구현]
-    # 조건문으로 분류하지 않고, LLM이 따라야 할 판단 기준을 프롬프트로 작성하세요.
-    # 날짜 기준, 출력 형식, 애매한 필드 처리 규칙을 자연어로 명확히 적으세요.
-    #
-    # [참고 답안]
     return (
         "너는 Kanana 일정 앱의 요청 구조화 에이전트다. "
         "사용자의 한국어 자연어 요청을 읽고 반드시 StructuredRequest 스키마로만 응답한다. "
@@ -59,11 +49,6 @@ def structured_output_system_prompt() -> str:
 def build_langchain_structured_agent() -> object:
     """LangChain v1.0+ structured output 에이전트를 만듭니다."""
 
-    # [2주차][학생 구현]
-    # response_format에 StructuredRequest를 넘겨 LLM이 스키마를 따르도록 만드세요.
-    # 여기서는 규칙 기반 parser나 if/elif 분류기를 만들지 않습니다.
-    #
-    # [참고 답안]
     if not CONFIG.has_openai_key:
         raise RuntimeError("OPENAI_API_KEY가 .env에 필요합니다.")
     model = ChatOpenAI(model=CONFIG.openai_model, temperature=0)
@@ -76,11 +61,6 @@ def build_langchain_structured_agent() -> object:
 
 
 def _structured_response_from_result(result: dict[str, Any]) -> StructuredRequest:
-    # [2주차][학생 구현]
-    # 에이전트 실행 결과에서 structured_response를 꺼내고 Pydantic으로 검증하세요.
-    # 앱의 다른 주차 도구들은 이 함수가 반환한 StructuredRequest를 사용합니다.
-    #
-    # [참고 답안]
     structured = result.get("structured_response")
     if isinstance(structured, StructuredRequest):
         return structured

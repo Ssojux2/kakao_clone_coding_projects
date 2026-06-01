@@ -65,6 +65,22 @@ def _delete_filter_from_query(query: str) -> tuple[dict[str, Any], dict[str, Any
     return structured, filters
 
 
+def _schedule_filter_payload(
+    schedule_ids: list[str] | None,
+    date: str | None,
+    title: str | None,
+    start_time: str | None,
+    time_unspecified: bool,
+) -> dict[str, Any]:
+    return {
+        "schedule_ids": schedule_ids,
+        "date": date,
+        "title": title,
+        "start_time": start_time,
+        "time_unspecified": time_unspecified,
+    }
+
+
 def _memory_schedule_matches(
     schedule: dict[str, Any],
     schedule_ids: list[str] | None = None,
@@ -120,11 +136,6 @@ def _delete_memory_schedules(
 def save_structured_request(payload: dict[str, Any] | str) -> str:
     """2주차 구조화 출력 페이로드를 정규화된 SQLite 테이블에 저장합니다."""
 
-    # [3주차][학생 구현]
-    # 2주차의 구조화 출력 결과를 structured_requests에 저장하고,
-    # kind에 따라 schedules/todos/reminders 중 알맞은 테이블에도 정규화 저장하세요.
-    #
-    # [참고 답안]
     saved = STORE.save_structured_request(_coerce_payload(payload))
     return json.dumps({"ok": True, "tool_name": "save_structured_request", **saved}, ensure_ascii=False)
 
@@ -137,10 +148,6 @@ def list_saved_requests(
 ) -> str:
     """SQLite에 저장된 구조화 요청 목록을 조회합니다."""
 
-    # [3주차][학생 구현]
-    # kind/date_from/date_to 필터를 SQL WHERE 조건으로 반영해 저장 결과를 조회하세요.
-    #
-    # [참고 답안]
     rows = STORE.list_saved_requests(kind=kind, date_from=date_from, date_to=date_to)
     return json.dumps({"ok": True, "tool_name": "list_saved_requests", "rows": rows}, ensure_ascii=False)
 
@@ -149,10 +156,6 @@ def list_saved_requests(
 def get_saved_request(request_id: str) -> str:
     """request_id로 구조화 요청 행 하나를 조회합니다."""
 
-    # [3주차][학생 구현]
-    # request_id로 structured_requests 행 하나를 찾아 반환하세요.
-    #
-    # [참고 답안]
     row = STORE.get_saved_request(request_id)
     return json.dumps({"ok": True, "tool_name": "get_saved_request", "row": row}, ensure_ascii=False)
 
@@ -184,6 +187,7 @@ def delete_saved_schedules_dict(
     store = app_store or AppSQLiteStore(CONFIG.app_db_path)
     has_filter = schedule_ids is not None or any([date, title, start_time, time_unspecified])
     if not delete_all and not has_filter:
+        filters = _schedule_filter_payload(schedule_ids, date, title, start_time, time_unspecified)
         return {
             "ok": False,
             "tool_name": "personal_delete_saved_schedules",
@@ -191,13 +195,7 @@ def delete_saved_schedules_dict(
             "delete_all": False,
             "bulk_delete": False,
             "deleted_count": 0,
-            "filters": {
-                "schedule_ids": schedule_ids,
-                "date": date,
-                "title": title,
-                "start_time": start_time,
-                "time_unspecified": time_unspecified,
-            },
+            "filters": filters,
             "deleted": [],
         }
     if delete_all:
@@ -230,13 +228,7 @@ def delete_saved_schedules_dict(
         "delete_all": delete_all,
         "bulk_delete": bool(not delete_all and deleted),
         "deleted_count": len(deleted),
-        "filters": {
-            "schedule_ids": schedule_ids,
-            "date": date,
-            "title": title,
-            "start_time": start_time,
-            "time_unspecified": time_unspecified,
-        },
+        "filters": _schedule_filter_payload(schedule_ids, date, title, start_time, time_unspecified),
         "deleted": deleted,
     }
 
