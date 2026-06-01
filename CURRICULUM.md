@@ -1,16 +1,15 @@
 # Kanana Agent 6주 / 총 12회 주차별 미션 커리큘럼
 
-이 문서는 Kanana Schedule Agent 수업에서 다루는 Week별 미션을 정리한 강사용 운영안입니다. 미션은 현재 `student_parts/weekXX_*.py` 코드에 실제로 들어 있는 도구와 데이터 흐름만 기준으로 작성합니다. 용어는 실제 개발 수업처럼 사용하되, 학습 활동은 초보 학습자가 작은 단위로 따라오도록 설계합니다.
+이 문서는 Kanana Schedule Agent 수업에서 다루는 Week별 미션을 정리한 강사용 운영안입니다. 미션은 현재 `student_parts/weekXX_*.py` 코드에 실제로 들어 있는 도구와 데이터 흐름만 기준으로 작성합니다. LLM과 Agent를 공부하는 학생들이 각 기능을 작은 단위로 따라가며 확인하도록 설계합니다.
 
 ## 운영 기준
 
-- 대상 수준: 중학교 1학년 수준의 Python 초보 학습자
-- 용어 수준: 대학생/초급 개발자 기준
+- 대상: LLM과 Agent를 공부하는 학생
 - 운영 시간: 주차당 2회, 회당 120분
 - 수업 방식: 핵심 개념 확인, 기준 코드 따라가기, 입력값 바꿔 실험하기, 결과 확인하기
 - 미션 방식: 각 Week 코드가 공개하는 tool, payload, 저장소, trace 흐름을 읽고 실행 결과로 검증하기
 
-## Week 1 · Stateful CRUD Tool
+## Week 1 · week01_wake_up_nana.py
 
 ### 미션: 개인 일정 CRUD tool과 JSON payload 흐름 확인
 
@@ -20,7 +19,7 @@
 
 검증 포인트는 tool이 반환한 JSON 문자열을 `json.loads()`로 dict로 바꾼 뒤 `created_schedule`, `schedules`, `deleted`, `structured_request` 필드를 확인하는 것입니다.
 
-## Week 2 · Structured Output Schema
+## Week 2 · week02_structure_natural_language_requests.py
 
 ### 미션: 자연어 요청을 `StructuredRequest` schema로 변환
 
@@ -30,7 +29,7 @@
 
 검증 포인트는 `내일`, `다음 주`, `오후 3시`, `팀원 A/B/C` 같은 표현이 schema 필드로 어떻게 들어가는지 비교하고, 조건문 parser가 아니라 LangChain/OpenAI structured output 결과와 Pydantic 검증이 맞물리는지 확인하는 것입니다.
 
-## Week 3 · SQLite Persistence
+## Week 3 · week03_build_nanas_logbook.py
 
 ### 미션: structured request 저장/조회와 저장 일정 삭제 흐름 확인
 
@@ -42,7 +41,7 @@
 
 검증 포인트는 같은 입력을 여러 번 저장했을 때 request id와 row가 어떻게 달라지는지, 삭제 payload의 `deleted_count`, `filters`, `deleted`가 어떤 의미를 갖는지 확인하는 것입니다.
 
-## Week 4 · Agentic RAG
+## Week 4 · week04_retrieve_nanas_memory.py
 
 ### 미션: Chroma 참고자료와 SQLite 저장 요청을 검색해 RAG context 조립
 
@@ -54,7 +53,7 @@
 
 검증 포인트는 검색어와 `limit` 값을 바꿨을 때 어떤 hit가 들어오는지, 최종 `context` 문자열이 모델 답변에 붙이기 좋은 형태인지 확인하는 것입니다.
 
-## Week 5 · MCP Tool Adapter
+## Week 5 · week05_load_kanas_past_conversations.py
 
 ### 미션: 외부 SQLite/MCP 기반 이전 대화와 멤버 일정 수집
 
@@ -66,7 +65,7 @@
 
 검증 포인트는 `member_names`, `date_from`, `date_to`를 바꿨을 때 외부 대화 row와 일정 row가 어떻게 달라지는지, `collect_member_schedules`의 `members`와 `rows`가 그룹 조율에 필요한 입력을 갖추는지 확인하는 것입니다.
 
-## Week 6 · Supervisor Routing and Sub-agents
+## Week 6 · week06_kanamate_decides_schedule.py
 
 ### 미션: Nana/Kana sub-agent와 supervisor routing으로 최종 일정 결정 payload 생성
 
@@ -82,7 +81,7 @@
 
 | 구간 | 시간 | 활동 |
 | --- | ---: | --- |
-| Concept | 20분 | 이번 Week의 핵심 용어와 데이터 흐름을 소개합니다. |
+| Concept | 20분 | 이번 Week의 핵심 개념과 데이터 흐름을 소개합니다. |
 | Walkthrough | 40분 | 기준 코드를 함께 읽고 TODO 단위로 구현 흐름을 확인합니다. |
 | Experiment | 40분 | 입력값, 조건, payload 필드를 바꿔 결과를 관찰합니다. |
 | Check | 20분 | 앱 화면, trace, JSON payload, test 중 하나로 동작을 확인합니다. |
@@ -98,4 +97,3 @@
 - 학생용 배포본에서는 `# [REFERENCE ANSWER]` 아래 구현을 가리고 TODO만 남깁니다.
 - 수업 전 `./run.sh --test`로 기준본이 통과하는지 확인합니다.
 - Week 3 이후에는 DB row가 누적될 수 있으므로 수업용 DB를 초기화하거나 복사본을 준비합니다.
-- 어려운 용어는 낮추지 말고, payload, table row, trace 화면과 바로 연결해 설명합니다.
