@@ -1,4 +1,4 @@
-# Kanana Schedule Agent 1-6주차 모범 답안
+# Kanana Schedule Agent
 
 Kanana 강의용 일정 Agent 프로젝트입니다. LLM과 Agent를 공부하는 학생들이 prompt-driven supervisor agent, sub-agent, tool 호출 흐름을 따라가며 학습하도록 구성했습니다. 메인 채팅 화면은 사용자 프롬프트를 보고 `nana_agent` 또는 `kana_agent` tool을 직접 호출하며, tool/trace는 상세 탭에서 확인합니다.
 
