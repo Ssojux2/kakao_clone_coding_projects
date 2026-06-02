@@ -49,6 +49,11 @@ _NANA_SUBAGENT: Any | None = None
 _KANA_SUBAGENT: Any | None = None
 
 
+# [수강생 구현 가이드]
+# Week 6의 학생 구현 대상은 @tool이 붙은 sub-agent 위임/그룹 조율 tool입니다.
+# prompt 함수, tool-list 함수, busy-time 계산 helper는 참고 코드로 남겨 두고 tool payload 계약에 집중하세요.
+
+
 def delete_schedule_by_query_dict(query: str, app_store: Any | None = None) -> dict[str, Any]:
     """기존 Week 6 import 호환을 유지하며 Week 3 삭제 헬퍼를 호출합니다."""
 
@@ -64,6 +69,8 @@ def delete_schedule_by_query_dict(query: str, app_store: Any | None = None) -> d
 def personal_delete_schedule_by_query(query: str) -> str:
     """일정 ID가 없어도 사용자 프롬프트의 날짜, 시간, 제목 단서로 개인 일정을 찾아 삭제합니다."""
 
+    # [수강생 구현 포인트]
+    # Week 3 삭제 helper를 그대로 JSON tool로 감싸 Week 6 import 호환을 유지합니다.
     return json.dumps(delete_schedule_by_query_dict(query), ensure_ascii=False)
 
 
@@ -79,6 +86,9 @@ def _harness_examples_text() -> str:
 
 
 def _nana_capability_text() -> str:
+    # [수강생 참고 코드 포인트]
+    # active_week에 따라 Nana가 알고 있어야 할 tool 설명만 누적합니다.
+    # prompt에는 tool 이름과 사용 조건을 구체적으로 써야 LLM이 올바른 tool chain을 선택합니다.
     parts = [
         "Week 1 개인 일정 생성/조회/삭제는 personal_create_schedule, personal_list_schedules, "
         "personal_delete_schedule을 사용한다."
@@ -93,6 +103,11 @@ def _nana_capability_text() -> str:
             "일정 삭제 요청이면 personal_list_saved_schedules로 후보를 확인하고 "
             "personal_delete_saved_schedules를 호출한다."
         )
+        parts.append(
+            "일정 수정 요청이면 personal_list_saved_schedules로 내 앱 DB 일정 원본 후보를 확인하고 "
+            "schedule_id를 고른 뒤 personal_update_saved_schedule을 호출한다. "
+            "공유 일정은 내 일정 원본 수정 결과에 맞춰 자동 갱신되므로 공유 일정만 단독으로 고치지 않는다."
+        )
     if CONFIG.active_week >= 4:
         parts.append(
             "Week 4 RAG 검색은 search_nana_memory 하나를 사용한다. 사용자 질문 전체가 아니라 "
@@ -103,6 +118,9 @@ def _nana_capability_text() -> str:
 
 
 def _nana_workflow_text() -> str:
+    # [수강생 참고 코드 포인트]
+    # 개인 일정 생성 workflow는 주차가 올라갈수록 "구조화 -> 생성 -> 저장"으로 확장됩니다.
+    # Week 3 이후에는 personal_create_schedule 결과의 structured_request를 save_structured_request로 넘겨야 합니다.
     if CONFIG.active_week <= 1:
         return "개인 일정 생성 요청이면 사용자의 프롬프트에서 필요한 값을 읽어 personal_create_schedule을 호출한다."
     if CONFIG.active_week == 2:
@@ -112,17 +130,26 @@ def _nana_workflow_text() -> str:
         )
     return (
         "개인 일정 생성 요청이면 extract_schedule_request 결과를 바탕으로 personal_create_schedule을 호출하고, "
-        "personal_create_schedule 결과의 structured_request를 save_structured_request payload로 전달해 앱 DB에 저장한다."
+        "personal_create_schedule 결과의 structured_request를 save_structured_request payload로 전달해 앱 DB에 저장한다. "
+        "저장된 개인 일정은 공유 일정에도 자동 동기화된다. 개인 일정 수정/삭제는 반드시 앱 DB에 저장된 내 일정 원본을 기준으로 수행한다."
     )
 
 
 def _kana_capability_text() -> str:
+    # [수강생 참고 코드 포인트]
+    # Kana는 여러 사람 일정만 담당합니다.
+    # Week 5에서는 외부 대화/일정 수집, Week 6에서는 공통 후보 계산과 최종 제안을 추가로 설명합니다.
     if CONFIG.active_week < 5:
         return "Kana 도구는 Week 5부터 열린다."
     parts = [
         "먼저 extract_schedule_request로 날짜와 멤버를 구조화한다.",
         "이전 대화 원문이 필요하면 search_previous_conversations나 load_conversation_messages를 쓴다.",
         "멤버별 바쁜 시간은 extract_schedules_from_history 또는 collect_member_schedules로 확인한다.",
+        "사용자가 '외부 팀원들 일정 조회해줘'처럼 멤버를 지정하지 않고 외부 팀원 일정을 묻는 경우 "
+        "기본 외부 팀원인 철수와 영희의 다음 주 화요일부터 목요일까지 일정을 extract_schedules_from_history로 조회해 요약한다.",
+        "외부 팀원 일정 조회 답변은 tool 결과의 schedule_summary 또는 rows를 기준으로 모든 일정을 빠짐없이 나열한다. "
+        "각 일정마다 반드시 멤버, 제목, 날짜, 시작 시간, 종료 시간, 비고를 포함한다. "
+        "rows에 해당 멤버 일정이 있으면 일정이 없다고 말하지 않는다.",
     ]
     if CONFIG.active_week >= 6:
         parts.append(
@@ -133,6 +160,9 @@ def _kana_capability_text() -> str:
 
 
 def nana_system_prompt() -> str:
+    # [수강생 참고 코드 포인트]
+    # Nana 하위 agent prompt에는 개인 일정/RAG만 맡긴다는 역할 경계와 사용할 tool chain을 적습니다.
+    # 도구 결과에 없는 사실을 만들지 말라는 제약도 함께 넣어야 trace 기반 검증이 안정적입니다.
     return (
         "너는 Kanana의 Nana 하위 에이전트다. 사용자의 프롬프트를 기준으로 필요한 도구를 직접 선택한다. "
         f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
@@ -149,6 +179,8 @@ def nana_system_prompt() -> str:
 
 
 def kana_system_prompt() -> str:
+    # [수강생 참고 코드 포인트]
+    # Kana 하위 agent prompt에는 멤버 일정 수집 -> 공통 가능 시간 계산 -> 최종 제안 순서를 안내합니다.
     return (
         "너는 Kanana의 Kana 하위 에이전트다. 여러 사람의 일정을 조율한다. "
         f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
@@ -160,6 +192,9 @@ def kana_system_prompt() -> str:
 
 
 def supervisor_system_prompt() -> str:
+    # [수강생 참고 코드 포인트]
+    # supervisor는 실제 일정 처리를 직접 하지 않고 nana_agent/kana_agent 중 하나로 위임합니다.
+    # 사용자 문장 기준으로 개인 일정은 Nana, 여러 사람/그룹 조율은 Kana로 보내는 기준을 적습니다.
     return (
         "너는 Kanana 일정 비서의 프롬프트 기반 supervisor 에이전트다. 메인 런타임이나 Python 코드가 "
         f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
@@ -169,7 +204,7 @@ def supervisor_system_prompt() -> str:
         "Week 1-4의 개인 일정/저장/RAG 흐름은 nana_agent에, Week 5-6의 여러 사람 일정/외부 대화/그룹 조율 흐름은 "
         "kana_agent에 맡긴다. 반드시 nana_agent 또는 kana_agent 도구 중 하나를 직접 호출한 뒤, "
         "그 도구 결과만 근거로 최종 답변을 작성한다. "
-        "개인 일정 생성/조회/삭제, todo/reminder 저장, 개인 참고자료 검색은 nana_agent에게 위임한다. "
+        "개인 일정 생성/조회/수정/삭제, todo/reminder 저장, 개인 참고자료 검색은 nana_agent에게 위임한다. "
         "팀원, 그룹, 여러 사람, 모두의 일정 조율은 kana_agent에게 위임한다. "
         "단, 사용자가 '그 시간', '방금 정한 시간', '아까 제안한 일정'처럼 이전 답변의 특정 "
         "후보를 그대로 사용하라고 하면 kana_agent로 다시 재탐색하지 말고, 이전 대화에 나온 "
@@ -251,6 +286,8 @@ def tool_name(tool_object: Any) -> str:
 def extract_schedule_request(query: str) -> str:
     """사용자 프롬프트를 일정 앱용 구조화 요청 JSON으로 변환합니다."""
 
+    # [수강생 구현 포인트]
+    # Kana도 날짜/멤버 구조화가 필요하므로 Week 2 structured output 흐름을 같은 JSON 계약으로 노출합니다.
     structured = extract_structured_request(query)
     return json.dumps(
         {
@@ -277,9 +314,13 @@ def _format_time_minutes(minutes: int) -> str:
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
+def _normalize_date_bound(value: str) -> str:
+    return str(value).split("T", 1)[0].strip()
+
+
 def _date_range(date_from: str, date_to: str) -> list[str]:
-    start = date.fromisoformat(date_from)
-    end = date.fromisoformat(date_to)
+    start = date.fromisoformat(_normalize_date_bound(date_from))
+    end = date.fromisoformat(_normalize_date_bound(date_to))
     if end < start:
         start, end = end, start
     days: list[str] = []
@@ -313,13 +354,20 @@ def find_common_available_slots_dict(
 ) -> dict[str, Any]:
     """멤버별 busy-time rows를 공통 가능 시간 후보로 바꿉니다."""
 
+    # [수강생 참고 코드 포인트]
+    # 1. collect_member_schedules로 나와 멤버들의 busy-time rows를 모읍니다.
+    # 2. 날짜 범위를 하루씩 순회하고, 업무시간을 30분 단위 window로 훑습니다.
+    # 3. 모든 busy row와 겹치지 않는 window만 candidate_slots에 넣습니다.
+    # 4. payload에는 members, busy_rows, candidate_slots를 모두 남겨 agent가 근거를 설명할 수 있게 합니다.
     normalized_members = _normalize_members(member_names)
+    normalized_date_from = _normalize_date_bound(date_from)
+    normalized_date_to = _normalize_date_bound(date_to)
     collected = json.loads(
         collect_member_schedules.invoke(
             {
                 "member_names": normalized_members,
-                "date_from": date_from,
-                "date_to": date_to,
+                "date_from": normalized_date_from,
+                "date_to": normalized_date_to,
             }
         )
     )
@@ -330,7 +378,7 @@ def find_common_available_slots_dict(
     step = 30
 
     candidate_slots: list[dict[str, Any]] = []
-    for day in _date_range(date_from, date_to):
+    for day in _date_range(normalized_date_from, normalized_date_to):
         cursor = start_minutes
         while cursor + duration <= end_minutes:
             slot_end = cursor + duration
@@ -376,6 +424,8 @@ def find_common_available_slots(
 ) -> str:
     """수집된 멤버 일정에서 공통으로 비어 있는 후보 시간을 계산합니다."""
 
+    # [수강생 구현 포인트]
+    # @tool wrapper는 dict helper 결과를 JSON 문자열로 감쌉니다.
     return json.dumps(
         find_common_available_slots_dict(
             member_names=member_names,
@@ -391,6 +441,9 @@ def find_common_available_slots(
 
 
 def nana_tools() -> list[Any]:
+    # [수강생 참고 코드 포인트]
+    # active_week에 맞춰 Nana에게 공개할 tool 목록을 고릅니다.
+    # Week 4 이후에도 Nana는 개인 일정/RAG tool만 담당하고 그룹 조율 tool은 받지 않습니다.
     if CONFIG.active_week <= 1:
         return week01_tools()
     if CONFIG.active_week == 2:
@@ -401,6 +454,9 @@ def nana_tools() -> list[Any]:
 
 
 def kana_tools() -> list[Any]:
+    # [수강생 참고 코드 포인트]
+    # Week 5부터 Kana tool이 열립니다.
+    # Week 6에서는 find_common_available_slots와 propose_group_schedule을 추가해 최종 결정까지 맡깁니다.
     if CONFIG.active_week < 5:
         return []
     tools = [
@@ -416,6 +472,9 @@ def kana_tools() -> list[Any]:
 
 
 def supervisor_tools() -> list[Any]:
+    # [수강생 참고 코드 포인트]
+    # supervisor에게는 하위 agent 위임 tool만 노출합니다.
+    # 이렇게 해야 supervisor가 세부 CRUD/RAG/MCP tool을 직접 호출하지 않습니다.
     if CONFIG.active_week < 5:
         return [nana_agent]
     return [nana_agent, kana_agent]
@@ -434,6 +493,8 @@ def agent_tool_names(agent_name: str) -> list[str]:
 def build_nana_subagent() -> object:
     """개인 일정과 RAG 작업을 처리하는 프롬프트 기반 Nana 하위 에이전트를 만듭니다."""
 
+    # [수강생 참고 코드 포인트]
+    # create_agent에 Nana prompt와 nana_tools()를 넘깁니다. 같은 agent를 재사용하도록 전역 캐시에 저장합니다.
     global _NANA_SUBAGENT
     if _NANA_SUBAGENT is None:
         _NANA_SUBAGENT = create_agent(
@@ -447,6 +508,8 @@ def build_nana_subagent() -> object:
 def build_kana_subagent() -> object:
     """그룹 일정 조율을 처리하는 프롬프트 기반 Kana 하위 에이전트를 만듭니다."""
 
+    # [수강생 참고 코드 포인트]
+    # create_agent에 Kana prompt와 kana_tools()를 넘깁니다.
     global _KANA_SUBAGENT
     if _KANA_SUBAGENT is None:
         _KANA_SUBAGENT = create_agent(
@@ -467,6 +530,9 @@ def propose_group_schedule(
 ) -> str:
     """Kana가 고른 후보 시간으로 최종 그룹 일정 결정 페이로드를 만듭니다."""
 
+    # [수강생 구현 포인트]
+    # selected_slot이 없으면 첫 번째 candidate를 선택하고, 후보가 없으면 needs_manual_review로 둡니다.
+    # final_decision에는 title/members/selected_slot/status/reason을 모두 담습니다.
     slots = candidate_slots or []
     selected = selected_slot or (slots[0] if slots else None)
     payload = {
@@ -483,6 +549,9 @@ def propose_group_schedule(
 def nana_agent(query: str) -> str:
     """개인 일정과 개인 RAG 작업을 프롬프트 기반 Nana 하위 에이전트에게 위임합니다."""
 
+    # [수강생 구현 포인트]
+    # supervisor가 호출하는 위임 tool입니다.
+    # 하위 agent 실행 결과에서 최종 답변과 tool trace를 추출해 JSON으로 반환합니다.
     if not CONFIG.has_openai_key:
         return json.dumps(
             {
@@ -515,6 +584,8 @@ def nana_agent(query: str) -> str:
 def kana_agent(query: str) -> str:
     """그룹 일정 종합 작업을 프롬프트 기반 Kana 하위 에이전트에게 위임합니다."""
 
+    # [수강생 구현 포인트]
+    # Kana trace 안에서 propose_group_schedule 결과를 찾아 final_decision_payload로 끌어올립니다.
     if not CONFIG.has_openai_key:
         return json.dumps(
             {
@@ -553,6 +624,9 @@ def kana_agent(query: str) -> str:
 def build_langchain_supervisor_agent() -> object:
     """nana_agent와 kana_agent 위임 도구만 노출하는 LangChain v1 슈퍼바이저입니다."""
 
+    # [수강생 참고 코드 포인트]
+    # supervisor agent에는 supervisor_tools()만 넘깁니다.
+    # 세부 기능은 하위 agent가 자기 tool 목록 안에서 직접 선택합니다.
     if not CONFIG.has_openai_key:
         raise RuntimeError("OPENAI_API_KEY가 .env에 필요합니다.")
     return create_agent(

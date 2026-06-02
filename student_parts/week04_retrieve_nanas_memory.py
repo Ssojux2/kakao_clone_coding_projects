@@ -14,6 +14,11 @@ REFERENCE_STORE = PersonalReferenceStore(CONFIG.chroma_dir)
 SQLITE_STORE = AppSQLiteStore(CONFIG.app_db_path)
 
 
+# [수강생 구현 가이드]
+# Week 4의 핵심 실습은 개인 참고자료 vector search와 SQLite 일정 검색을 하나의 RAG tool 결과로 합치는 것입니다.
+# add_personal_reference는 ChromaDB에 자료를 넣는 tool, search_nana_memory는 참고자료 hit와 일정 chunk/context를 반환하는 tool입니다.
+
+
 def _safe_limit(limit: int, default: int = 5, maximum: int = 50) -> int:
     try:
         value = int(limit)
@@ -38,6 +43,8 @@ def _reference_backend_info() -> dict[str, Any]:
 def add_personal_reference(title: str, content: str, tags: list[str] | None = None) -> str:
     """개인 참고자료를 ChromaDB에 추가합니다."""
 
+    # [수강생 구현 포인트]
+    # title/content/tags를 PersonalReferenceStore에 저장하고, reference_backend를 함께 반환해 어떤 vector store를 썼는지 남깁니다.
     item = REFERENCE_STORE.add_personal_reference(title=title, content=content, tags=tags or [])
     return json.dumps(
         {
@@ -60,6 +67,11 @@ def search_nana_memory(
 ) -> str:
     """개인 참고자료와 SQLite 저장 일정을 한 번에 검색하고 일정 chunk를 반환합니다."""
 
+    # [수강생 구현 포인트]
+    # 1. limit을 안전한 범위로 보정합니다.
+    # 2. ChromaDB에서 개인 참고자료를 검색합니다.
+    # 3. SQLite schedules 테이블을 query/date/attendee 조건으로 검색합니다.
+    # 4. 일정 row를 LLM이 읽기 쉬운 schedule_chunks와 context 문자열로 변환합니다.
     normalized_limit = _safe_limit(limit, default=5, maximum=20)
     reference_hits = REFERENCE_STORE.search_personal_references(query=query, limit=min(normalized_limit, 5))
 
@@ -95,6 +107,8 @@ def search_nana_memory(
     with SQLITE_STORE.connect() as conn:
         rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
 
+    # [수강생 구현 포인트]
+    # RAG에서는 DB row를 그대로 넘기기보다, chunk_id/content/metadata를 갖춘 작은 문서 조각으로 바꿔주는 것이 좋습니다.
     schedule_chunks: list[dict[str, Any]] = []
     for index, row in enumerate(rows):
         raw_attendees = row.pop("attendees_json", "[]")
@@ -134,6 +148,9 @@ def search_nana_memory(
         source = (chunk.get("metadata") or {}).get("source") or "unknown"
         lines.append(f"- {chunk.get('chunk_id')} | {chunk.get('content')} | source={source}")
     context = "\n".join(lines)
+    # [수강생 구현 포인트]
+    # context는 agent가 최종 답변을 만들 때 붙여 읽을 근거 문자열입니다.
+    # JSON payload에는 원본 hit와 chunk도 같이 넣어 trace에서 검증할 수 있게 합니다.
     return json.dumps(
         {
             "ok": True,
@@ -170,6 +187,8 @@ def search_nana_memory_dict(
 def week04_tools() -> list[Any]:
     """3주차까지의 도구에 4주차 RAG 도구를 누적한 목록입니다."""
 
+    # [수강생 참고 코드 포인트]
+    # Week 3까지의 저장/조회 tool에 RAG 입력/검색 tool을 추가합니다.
     return [
         *week03_tools(),
         add_personal_reference,

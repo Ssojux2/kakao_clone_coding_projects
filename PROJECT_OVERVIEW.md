@@ -28,7 +28,7 @@
 | `CURRICULUM.md` | 6주 / 총 12회 수업 계획 | 각 Week의 미션, 코드 흐름, 검증 포인트를 확인합니다. | 문서 개선 시 수정 가능 |
 | `PROJECT_OVERVIEW.md` | 전체 구조와 학습 흐름 안내 | 파일 간 관계를 파악할 때 봅니다. | 문서 개선 시 수정 가능 |
 | `app.py` | Gradio UI, 채팅/상세 탭, trace 표시 | 입력이 런타임으로 들어가고 결과가 화면에 나오는 흐름을 확인합니다. | 보통 수정하지 않음 |
-| `student_parts/` | Week 1-6 수강생 구현 파일 | `# [WEEK NN][STUDENT TODO]` 주석 아래 구현 흐름을 봅니다. | 예 |
+| `student_parts/` | Week 1-6 수강생 구현 파일 | 학생용 배포본에서는 `@tool` 함수 안의 `# [STUDENT TODO]` 주석 아래 구현 흐름을 봅니다. | 예 |
 | `fixed/agent_runtime.py` | prompt-driven agent 런타임 | 채팅 입력이 supervisor agent로 들어가고 trace가 수집되는 흐름을 확인합니다. | 보통 수정하지 않음 |
 | `fixed/stores.py` | SQLite/Chroma 저장소 구현 | 테이블 구조와 저장소 API를 참고합니다. Week 실습 구현은 보통 `student_parts/`에서 합니다. | 보통 수정하지 않음 |
 | `fixed/config.py` | `.env`, DB 경로, 모델 설정 | 실행 환경 설정이 어디에서 로드되는지 확인합니다. | 필요 시 강사와 함께 수정 |
@@ -60,7 +60,7 @@
 
 1. [README.md](README.md)에서 실행 방법과 환경 변수를 확인합니다.
 2. 이 문서의 "30초 요약"과 "전체 실행 흐름"을 먼저 봅니다.
-3. `student_parts/weekXX_*.py` 파일을 열고 `# [WEEK NN][STUDENT TODO]` 주석을 찾습니다.
+3. `student_parts/weekXX_*.py` 파일을 열고 `@tool` 함수 안의 `# [STUDENT TODO]` 주석을 찾습니다.
 4. `./run.sh --test-week N`으로 현재 주차 구현이 통과하는지 확인합니다.
 5. `./run.sh --test` 또는 `./run.sh --golden`으로 전체 기준본이 통과하는지 확인합니다.
 6. 앱을 실행한 뒤 "상세" 탭에서 마지막 Agent 실행 trace를 확인합니다.
@@ -103,7 +103,7 @@ Week 3 테스트와 Week 3까지의 golden wiring만 확인합니다.
 ./run.sh --make-student-copy
 ```
 
-`dist/kanana_student`에 핵심 구현부가 TODO로 바뀐 학생용 배포본을 생성합니다.
+`dist/kanana_student`에 `@tool` 함수 구현부만 TODO로 바뀐 학생용 배포본을 생성합니다.
 
 ## 읽는 팁
 

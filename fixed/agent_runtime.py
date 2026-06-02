@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
 from fixed.config import CONFIG
-from fixed.stores import AppSQLiteStore
+from fixed.runtime_clock import current_app_date_iso, next_weekday_iso
+from fixed.stores import AppSQLiteStore, DEFAULT_EXTERNAL_MEMBERS, PERSONAL_SHARED_MEMBER_NAME
 
 
 @dataclass
@@ -49,6 +51,12 @@ class AgentRuntime:
         previous_messages = self.app_store.load_conversation(conversation_id)
         is_new_conversation = not previous_messages
         self.app_store.append_message(conversation_id, "user", user_message)
+
+        direct_lookup = self._run_external_schedule_lookup(user_message)
+        if direct_lookup is not None:
+            self.app_store.append_message(conversation_id, "assistant", direct_lookup.answer)
+            direct_lookup.trace["conversation_id"] = conversation_id
+            return RuntimeResult(answer=direct_lookup.answer, trace=direct_lookup.trace, conversation_id=conversation_id)
 
         if not CONFIG.has_openai_key:
             answer = (
@@ -104,6 +112,110 @@ class AgentRuntime:
             attendee_text = f" / 참석자: {', '.join(attendees)}" if attendees else ""
             lines.append(f"- {date} {time_range} | {row.get('title') or '제목 없음'}{attendee_text}")
         return "\n".join(lines)
+
+    def _run_external_schedule_lookup(self, user_message: str) -> RuntimeResult | None:
+        if not self._is_external_schedule_lookup(user_message):
+            return None
+
+        from student_parts.week05_load_kanas_past_conversations import extract_schedules_from_history
+
+        members = self._external_lookup_members(user_message)
+        date_from, date_to = self._external_lookup_date_bounds(user_message)
+        payload_text = extract_schedules_from_history.invoke(
+            {"member_names": members, "date_from": date_from, "date_to": date_to}
+        )
+        payload = json.loads(payload_text)
+        answer = self._format_external_schedule_lookup_answer(payload, date_from, date_to)
+        return RuntimeResult(
+            answer=answer,
+            trace={
+                "mode": "mcp_direct_external_schedule_lookup",
+                "events": [
+                    {
+                        "event": "tool_call",
+                        "tool_name": "extract_schedules_from_history",
+                        "arguments": {"member_names": members, "date_from": date_from, "date_to": date_to},
+                    },
+                    {
+                        "event": "tool_result",
+                        "tool_name": "extract_schedules_from_history",
+                        "content": payload,
+                    },
+                ],
+                "supervisor_selected_agent": "kana_agent",
+                "inner_tool_names": ["extract_schedules_from_history"],
+                "final_decision_payload": None,
+            },
+            conversation_id="",
+        )
+
+    def _is_external_schedule_lookup(self, user_message: str) -> bool:
+        text = (user_message or "").replace(" ", "")
+        shared_schedule_terms = ["공유", "다른사람", "사람들", "팀원", "동료", "멤버"]
+        mentions_external_people = (
+            "외부" in text
+            or any(term in text for term in shared_schedule_terms)
+            or any(member in text for member in DEFAULT_EXTERNAL_MEMBERS)
+        )
+        asks_schedule = "일정" in text
+        asks_lookup = any(token in text for token in ["조회", "확인", "알려", "보여", "정리", "어떻게"])
+        asks_coordination = any(token in text for token in ["잡아", "예약", "추가", "등록", "가능", "후보", "비어"])
+        return mentions_external_people and asks_schedule and asks_lookup and not asks_coordination
+
+    def _external_lookup_members(self, user_message: str) -> list[str]:
+        selected = [member for member in DEFAULT_EXTERNAL_MEMBERS if member in user_message]
+        compact_text = user_message.replace(" ", "")
+        if PERSONAL_SHARED_MEMBER_NAME in user_message or "내" in compact_text:
+            selected.insert(0, PERSONAL_SHARED_MEMBER_NAME)
+        if selected:
+            return selected
+        if "공유" in compact_text:
+            return [PERSONAL_SHARED_MEMBER_NAME, *DEFAULT_EXTERNAL_MEMBERS]
+        return []
+
+    def _external_lookup_date_bounds(self, user_message: str) -> tuple[str, str]:
+        explicit_dates = re.findall(r"\d{4}-\d{2}-\d{2}", user_message)
+        if len(explicit_dates) >= 2:
+            return explicit_dates[0], explicit_dates[1]
+        if len(explicit_dates) == 1:
+            return explicit_dates[0], explicit_dates[0]
+
+        weekday_dates = []
+        for label, weekday in [("화요일", 1), ("수요일", 2), ("목요일", 3)]:
+            if label in user_message:
+                weekday_dates.append(next_weekday_iso(weekday))
+        if weekday_dates:
+            return min(weekday_dates), max(weekday_dates)
+        if "다음주" in user_message.replace(" ", ""):
+            return next_weekday_iso(1), next_weekday_iso(3)
+        if "공유" in user_message:
+            return current_app_date_iso(), next_weekday_iso(3)
+        return next_weekday_iso(1), next_weekday_iso(3)
+
+    def _format_external_schedule_lookup_answer(
+        self,
+        payload: dict[str, Any],
+        date_from: str,
+        date_to: str,
+    ) -> str:
+        rows = payload.get("rows") or []
+        if not rows:
+            return f"현재 공유 일정 저장소에서 {date_from}~{date_to} 범위에 조회된 일정이 없습니다."
+
+        summary = payload.get("schedule_summary") or ""
+        if not summary:
+            summary = "\n".join(
+                "- {member_name} | {title} | {date} {start_time}-{end_time} | {notes}".format(
+                    member_name=row.get("member_name") or "이름 미정",
+                    title=row.get("title") or "제목 없음",
+                    date=row.get("date") or "날짜 미정",
+                    start_time=row.get("start_time") or "시간 미정",
+                    end_time=row.get("end_time") or "시간 미정",
+                    notes=row.get("notes") or "비고 없음",
+                )
+                for row in rows
+            )
+        return f"현재 공유 일정 저장소 기준 일정입니다.\n조회 범위: {date_from}~{date_to}\n\n{summary}"
 
     def _get_supervisor_agent(self) -> Any:
         if self._supervisor_agent is None:

@@ -35,14 +35,14 @@ GOLDEN_CASES = [
     {
         "id": "week5_mcp_sqlite",
         "week": 5,
-        "input": "민준 서연 지훈의 이전 대화에서 다음 주 일정을 검색해줘",
+        "input": "외부 팀원들 일정 조회해줘",
         "expected_agent": "kana_agent",
         "expected_tool": "extract_schedules_from_history",
     },
     {
         "id": "week6_kana_group_decision",
         "week": 6,
-        "input": "팀원 A/B/C와 다음 주 회의 시간을 잡아줘",
+        "input": "철수 영희와 다음 주 회의 시간을 잡아줘",
         "expected_agent": "kana_agent",
         "expected_tool": "propose_group_schedule",
         "expected_tools": ["collect_member_schedules", "find_common_available_slots", "propose_group_schedule"],

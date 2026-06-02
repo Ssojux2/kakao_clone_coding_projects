@@ -18,6 +18,15 @@ runtime = AgentRuntime()
 CSS_PATH = STATIC_DIR / "app.css"
 MAX_CONVERSATION_BUTTONS = 12
 ENTER_TO_SEND_HEAD = """
+<style>
+@media (min-width: 981px) {
+  html,
+  body {
+    height: 100dvh !important;
+    overflow-y: hidden !important;
+  }
+}
+</style>
 <script>
 function setKananaTextareaValue(textarea, value) {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
@@ -30,10 +39,19 @@ document.addEventListener("keydown", function(event) {
   const target = event.target;
   if (!(target instanceof HTMLTextAreaElement)) return;
   if (!target.closest("#kanana-input")) return;
-  if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+  if (event.key !== "Enter" || event.isComposing) return;
 
   event.preventDefault();
   event.stopPropagation();
+
+  if (event.shiftKey) {
+    const start = target.selectionStart ?? target.value.length;
+    const end = target.selectionEnd ?? target.value.length;
+    const nextValue = `${target.value.slice(0, start)}\n${target.value.slice(end)}`;
+    setKananaTextareaValue(target, nextValue);
+    target.setSelectionRange(start + 1, start + 1);
+    return;
+  }
 
   const sendRoot = document.querySelector("#kanana-send");
   const sendButton =
@@ -221,7 +239,7 @@ def build_demo() -> gr.Blocks:
             f"""
             <div class="kanana-topbar">
               <div class="brand-lockup">
-                <span>Smart Schedule Agent · Week {CONFIG.active_week}</span>
+                <span>Smart Schedule Agent</span>
               </div>
             </div>
             """
@@ -252,7 +270,7 @@ def build_demo() -> gr.Blocks:
                         )
                         with gr.Row(elem_classes=["composer"]):
                             textbox = gr.Textbox(
-                                placeholder="팀원 A/B/C와 다음 주 회의 시간을 잡아줘",
+                                placeholder="철수 영희와 다음 주 회의 시간을 잡아줘",
                                 show_label=False,
                                 lines=2,
                                 elem_id="kanana-input",

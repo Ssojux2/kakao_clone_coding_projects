@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import uuid
 from datetime import datetime
@@ -9,6 +10,10 @@ from typing import Any
 
 from fixed.config import CONFIG
 from fixed.runtime_clock import app_started_at_iso, next_weekday_iso
+
+EXTERNAL_MEMBER_ALIAS: dict[str, str] = {}
+DEFAULT_EXTERNAL_MEMBERS = ["철수", "영희"]
+PERSONAL_SHARED_MEMBER_NAME = "나"
 
 
 def now_iso() -> str:
@@ -21,6 +26,56 @@ def new_id(prefix: str) -> str:
 
 def rows_to_dicts(cursor: sqlite3.Cursor) -> list[dict[str, Any]]:
     return [dict(row) for row in cursor.fetchall()]
+
+
+def external_db_path_from_env() -> Path:
+    return Path(os.getenv("KANANA_EXTERNAL_DB_PATH", str(CONFIG.external_db_path)))
+
+
+def normalize_external_member_names(member_names: list[str] | None) -> list[str]:
+    normalized = [
+        EXTERNAL_MEMBER_ALIAS.get(str(name).strip(), str(name).strip())
+        for name in (member_names or [])
+        if str(name).strip()
+    ]
+    return normalized or list(DEFAULT_EXTERNAL_MEMBERS)
+
+
+def normalize_external_date_bound(value: str | None) -> str:
+    if value is None:
+        return ""
+    return str(value).split("T", 1)[0].strip()
+
+
+def normalize_external_schedule_date_bounds(
+    member_names: list[str] | None,
+    date_from: str,
+    date_to: str,
+) -> tuple[str, str]:
+    normalized_members = normalize_external_member_names(member_names)
+    normalized_date_from = normalize_external_date_bound(date_from)
+    normalized_date_to = normalize_external_date_bound(date_to)
+    if (
+        set(normalized_members) == set(DEFAULT_EXTERNAL_MEMBERS)
+        and normalized_date_from == normalized_date_to == next_weekday_iso(1)
+    ):
+        normalized_date_to = next_weekday_iso(3)
+    return normalized_date_from, normalized_date_to
+
+
+def external_schedule_summary(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "조회된 외부 일정이 없습니다."
+    lines: list[str] = []
+    for row in rows:
+        member_name = row.get("member_name") or "이름 미정"
+        title = row.get("title") or "제목 없음"
+        date_text = row.get("date") or "날짜 미정"
+        start_time = row.get("start_time") or "시간 미정"
+        end_time = row.get("end_time") or "시간 미정"
+        notes = row.get("notes") or "비고 없음"
+        lines.append(f"- {member_name} | {title} | {date_text} {start_time}-{end_time} | {notes}")
+    return "\n".join(lines)
 
 
 def decode_schedule_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -36,6 +91,10 @@ def decode_schedule_row(row: dict[str, Any]) -> dict[str, Any]:
 SCHEDULE_COLUMNS = (
     "schedule_id, request_id, owner, title, date, start_time, end_time, "
     "attendees_json, source, created_at"
+)
+SCHEDULE_COLUMNS_WITH_KIND = (
+    f"{SCHEDULE_COLUMNS}, "
+    "(SELECT kind FROM structured_requests WHERE request_id = schedules.request_id) AS request_kind"
 )
 
 
@@ -224,6 +283,7 @@ class AppSQLiteStore(SQLiteFileStore):
         reason = payload.get("reason")
         created_at = now_iso()
         saved_rows: list[dict[str, Any]] = []
+        shared_sync: dict[str, Any] | None = None
 
         with self.connect() as conn:
             conn.execute(
@@ -268,6 +328,21 @@ class AppSQLiteStore(SQLiteFileStore):
                     ),
                 )
                 saved_rows.append({"table": "schedules", "id": schedule_id})
+                if kind == "personal_schedule":
+                    shared_sync = self._sync_personal_schedule_to_shared(
+                        {
+                            "schedule_id": schedule_id,
+                            "request_id": request_id,
+                            "owner": "me",
+                            "title": title,
+                            "date": date,
+                            "start_time": start_time,
+                            "end_time": end_time,
+                            "attendees": members,
+                            "source": "structured_output",
+                            "created_at": created_at,
+                        }
+                    )
             elif kind == "todo":
                 todo_id = new_id("todo")
                 conn.execute(
@@ -289,7 +364,69 @@ class AppSQLiteStore(SQLiteFileStore):
                 )
                 saved_rows.append({"table": "reminders", "id": reminder_id})
 
-        return {"request_id": request_id, "kind": kind, "saved_rows": saved_rows}
+        return {"request_id": request_id, "kind": kind, "saved_rows": saved_rows, "shared_sync": shared_sync}
+
+    def _sync_personal_schedule_to_shared(self, schedule: dict[str, Any]) -> dict[str, Any]:
+        if not schedule.get("date"):
+            return {
+                "ok": False,
+                "status": "skipped",
+                "reason": "공유 일정 등록에는 날짜가 필요합니다.",
+            }
+        try:
+            from fixed.mcp_client import call_local_mcp_tool_sync
+
+            payload_text = call_local_mcp_tool_sync(
+                "create_shared_schedule",
+                {
+                    "member_name": PERSONAL_SHARED_MEMBER_NAME,
+                    "title": schedule.get("title") or "제목 없음",
+                    "date": schedule.get("date"),
+                    "start_time": schedule.get("start_time") or "미정",
+                    "end_time": schedule.get("end_time") or "미정",
+                    "notes": "앱 개인 일정 자동 동기화",
+                    "source_conversation_id": f"app:{schedule['request_id']}",
+                    "schedule_id": f"shared_{schedule['schedule_id']}",
+                },
+                db_path=external_db_path_from_env(),
+            )
+            payload = json.loads(payload_text)
+            shared = payload.get("shared_schedule", {})
+            return {
+                "ok": True,
+                "status": shared.get("sync_status", "synced"),
+                "tool_name": "create_shared_schedule",
+                "shared_schedule": shared,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "status": "failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+
+    def _delete_personal_schedule_from_shared(self, request_id: str) -> dict[str, Any]:
+        try:
+            from fixed.mcp_client import call_local_mcp_tool_sync
+
+            payload_text = call_local_mcp_tool_sync(
+                "delete_shared_schedule",
+                {"source_conversation_id": f"app:{request_id}"},
+                db_path=external_db_path_from_env(),
+            )
+            payload = json.loads(payload_text)
+            return {
+                "ok": True,
+                "tool_name": "delete_shared_schedule",
+                "deleted": payload.get("deleted", []),
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
 
     # Structured request lookup
 
@@ -362,6 +499,106 @@ class AppSQLiteStore(SQLiteFileStore):
             rows = rows_to_dicts(cur)
         return [decode_schedule_row(row) for row in rows]
 
+    def update_schedule(
+        self,
+        schedule_id: str,
+        title: str | None = None,
+        date: str | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        attendees: list[str] | None = None,
+    ) -> dict[str, Any] | None:
+        """앱 DB의 개인 일정 원본을 수정하고 공유 일정 복사본을 같은 값으로 갱신합니다."""
+
+        with self.connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT {SCHEDULE_COLUMNS_WITH_KIND}
+                FROM schedules
+                WHERE schedule_id = ?
+                """,
+                (schedule_id,),
+            ).fetchone()
+            if row is None:
+                return None
+
+            current = decode_schedule_row(dict(row))
+            next_attendees = attendees if attendees is not None else current.get("attendees", [])
+            updated = {
+                **current,
+                "title": title if title is not None else current.get("title"),
+                "date": date if date is not None else current.get("date"),
+                "start_time": start_time if start_time is not None else current.get("start_time"),
+                "end_time": end_time if end_time is not None else current.get("end_time"),
+                "attendees": next_attendees,
+            }
+            attendees_json = json.dumps(next_attendees, ensure_ascii=False)
+            conn.execute(
+                """
+                UPDATE schedules
+                SET title = ?,
+                    date = ?,
+                    start_time = ?,
+                    end_time = ?,
+                    attendees_json = ?
+                WHERE schedule_id = ?
+                """,
+                (
+                    updated["title"],
+                    updated["date"],
+                    updated["start_time"],
+                    updated["end_time"],
+                    attendees_json,
+                    schedule_id,
+                ),
+            )
+            raw_row = conn.execute(
+                "SELECT raw_json FROM structured_requests WHERE request_id = ?",
+                (current.get("request_id"),),
+            ).fetchone()
+            raw_payload: dict[str, Any] = {}
+            if raw_row:
+                try:
+                    raw_payload = json.loads(raw_row["raw_json"] or "{}")
+                except Exception:
+                    raw_payload = {}
+            raw_payload.update(
+                {
+                    "title": updated["title"],
+                    "date": updated["date"],
+                    "start_time": updated["start_time"],
+                    "end_time": updated["end_time"],
+                    "members": next_attendees,
+                }
+            )
+            conn.execute(
+                """
+                UPDATE structured_requests
+                SET title = ?,
+                    date = ?,
+                    start_time = ?,
+                    end_time = ?,
+                    members_json = ?,
+                    raw_json = ?
+                WHERE request_id = ?
+                  AND kind IN ('personal_schedule', 'group_schedule')
+                """,
+                (
+                    updated["title"],
+                    updated["date"],
+                    updated["start_time"],
+                    updated["end_time"],
+                    attendees_json,
+                    json.dumps(raw_payload, ensure_ascii=False),
+                    current.get("request_id"),
+                ),
+            )
+
+        shared_sync = None
+        if updated.get("request_kind") == "personal_schedule":
+            shared_sync = self._sync_personal_schedule_to_shared(updated)
+        return {"schedule": updated, "shared_sync": shared_sync}
+
     def find_schedules(
         self,
         schedule_ids: list[str] | None = None,
@@ -411,7 +648,7 @@ class AppSQLiteStore(SQLiteFileStore):
         with self.connect() as conn:
             row = conn.execute(
                 f"""
-                SELECT {SCHEDULE_COLUMNS}
+                SELECT {SCHEDULE_COLUMNS_WITH_KIND}
                 FROM schedules
                 WHERE schedule_id = ?
                 """,
@@ -419,6 +656,7 @@ class AppSQLiteStore(SQLiteFileStore):
             ).fetchone()
             if row is None:
                 return None
+            decoded = decode_schedule_row(dict(row))
             conn.execute("DELETE FROM schedules WHERE schedule_id = ?", (schedule_id,))
             conn.execute(
                 """
@@ -429,7 +667,10 @@ class AppSQLiteStore(SQLiteFileStore):
                 (row["request_id"],),
             )
 
-        return decode_schedule_row(dict(row))
+        if decoded.get("request_kind") == "personal_schedule" and decoded.get("request_id"):
+            self._delete_personal_schedule_from_shared(decoded["request_id"])
+
+        return decoded
 
     def delete_schedules_by_filter(
         self,
@@ -466,7 +707,7 @@ class AppSQLiteStore(SQLiteFileStore):
         with self.connect() as conn:
             cur = conn.execute(
                 f"""
-                SELECT {SCHEDULE_COLUMNS}
+                SELECT {SCHEDULE_COLUMNS_WITH_KIND}
                 FROM schedules
                 ORDER BY created_at DESC
                 """
@@ -480,7 +721,11 @@ class AppSQLiteStore(SQLiteFileStore):
                 """
             )
 
-        return [decode_schedule_row(row) for row in deleted_rows]
+        decoded_rows = [decode_schedule_row(row) for row in deleted_rows]
+        for row in decoded_rows:
+            if row.get("request_kind") == "personal_schedule" and row.get("request_id"):
+                self._delete_personal_schedule_from_shared(row["request_id"])
+        return decoded_rows
 
 
 class ExternalPeopleSQLiteStore(SQLiteFileStore):
@@ -531,47 +776,200 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
 
     def seed(self) -> None:
         with self.connect() as conn:
-            count = conn.execute("SELECT COUNT(*) AS count FROM external_schedules").fetchone()["count"]
-            if count:
-                return
+            legacy_conversation_ids = ["ext_mj", "ext_sy", "ext_jh"]
+            placeholders = ",".join("?" for _ in legacy_conversation_ids)
+            conn.execute(
+                f"DELETE FROM external_schedules WHERE source_conversation_id IN ({placeholders})",
+                legacy_conversation_ids,
+            )
+            conn.execute(
+                f"DELETE FROM external_messages WHERE conversation_id IN ({placeholders})",
+                legacy_conversation_ids,
+            )
+            conn.execute(
+                f"DELETE FROM external_conversations WHERE conversation_id IN ({placeholders})",
+                legacy_conversation_ids,
+            )
 
             conversations = [
-                ("ext_mj", "민준", "민준의 다음 주 일정 공유", "민준: 다음 주 화요일 10시에는 면담, 수요일 14시에는 코드 리뷰가 있어요."),
-                ("ext_sy", "서연", "서연의 다음 주 일정 공유", "서연: 화요일 13시는 디자인 싱크, 수요일 10시는 고객 미팅입니다."),
-                ("ext_jh", "지훈", "지훈의 다음 주 일정 공유", "지훈: 화요일 15시 배포 점검, 목요일 오전은 워크숍으로 막혀 있어요."),
+                ("ext_cs", "철수", "철수의 다음 주 일정 공유", "철수: 다음 주 화요일 11시는 영업 미팅, 목요일 14시는 파트너 콜이 있어요."),
+                ("ext_yh", "영희", "영희의 다음 주 일정 공유", "영희: 다음 주 수요일 13시는 리서치 리뷰, 15시는 마케팅 싱크, 목요일 16시는 콘텐츠 점검입니다."),
             ]
             created_at = app_started_at_iso()
             next_tuesday = next_weekday_iso(1)
             next_wednesday = next_weekday_iso(2)
             next_thursday = next_weekday_iso(3)
             schedules = [
-                ("민준", "멘토 면담", next_tuesday, "10:00", "11:00", "ext_mj", "다음 주 화요일 오전 불가"),
-                ("민준", "코드 리뷰", next_wednesday, "14:00", "15:00", "ext_mj", "수요일 14시 불가"),
-                ("서연", "디자인 싱크", next_tuesday, "13:00", "14:00", "ext_sy", "화요일 점심 직후 불가"),
-                ("서연", "고객 미팅", next_wednesday, "10:00", "11:00", "ext_sy", "수요일 오전 불가"),
-                ("지훈", "배포 점검", next_tuesday, "15:00", "16:00", "ext_jh", "화요일 오후 불가"),
-                ("지훈", "워크숍", next_thursday, "10:00", "12:00", "ext_jh", "목요일 오전 불가"),
+                ("철수", "영업 미팅", next_tuesday, "11:00", "12:00", "ext_cs", "화요일 11시 불가"),
+                ("철수", "파트너 콜", next_thursday, "14:00", "15:00", "ext_cs", "목요일 14시 불가"),
+                ("영희", "리서치 리뷰", next_wednesday, "13:00", "14:00", "ext_yh", "수요일 13시 불가"),
+                ("영희", "마케팅 싱크", next_wednesday, "15:00", "16:00", "ext_yh", "수요일 15시 불가"),
+                ("영희", "콘텐츠 점검", next_thursday, "16:00", "17:00", "ext_yh", "목요일 16시 불가"),
             ]
             for conversation_id, member_name, title, content in conversations:
                 conn.execute(
-                    "INSERT INTO external_conversations VALUES (?, ?, ?, ?)",
+                    """
+                    INSERT INTO external_conversations VALUES (?, ?, ?, ?)
+                    ON CONFLICT(conversation_id) DO UPDATE SET
+                        member_name = excluded.member_name,
+                        title = excluded.title
+                    """,
                     (conversation_id, member_name, title, created_at),
                 )
-                conn.execute(
-                    "INSERT INTO external_messages VALUES (?, ?, 'user', ?, ?, ?)",
-                    (
-                        new_id("extmsg"),
-                        conversation_id,
-                        member_name,
-                        content,
-                        created_at,
-                    ),
-                )
+                message_exists = conn.execute(
+                    """
+                    SELECT 1
+                    FROM external_messages
+                    WHERE conversation_id = ?
+                      AND sender = ?
+                      AND content = ?
+                    LIMIT 1
+                    """,
+                    (conversation_id, member_name, content),
+                ).fetchone()
+                if not message_exists:
+                    conn.execute(
+                        "INSERT INTO external_messages VALUES (?, ?, 'user', ?, ?, ?)",
+                        (
+                            new_id("extmsg"),
+                            conversation_id,
+                            member_name,
+                            content,
+                            created_at,
+                        ),
+                    )
             for member_name, title, date, start_time, end_time, conversation_id, notes in schedules:
+                existing = conn.execute(
+                    """
+                    SELECT schedule_id
+                    FROM external_schedules
+                    WHERE member_name = ?
+                      AND title = ?
+                      AND COALESCE(source_conversation_id, '') = ?
+                    LIMIT 1
+                    """,
+                    (member_name, title, conversation_id),
+                ).fetchone()
+                if existing:
+                    conn.execute(
+                        """
+                        UPDATE external_schedules
+                        SET date = ?,
+                            start_time = ?,
+                            end_time = ?,
+                            notes = ?,
+                            source_conversation_id = ?
+                        WHERE schedule_id = ?
+                        """,
+                        (date, start_time, end_time, notes, conversation_id, existing["schedule_id"]),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO external_schedules VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (new_id("extsch"), member_name, title, date, start_time, end_time, conversation_id, notes),
+                    )
+
+    def create_shared_schedule(
+        self,
+        member_name: str,
+        title: str,
+        date: str,
+        start_time: str,
+        end_time: str = "미정",
+        notes: str | None = None,
+        source_conversation_id: str | None = None,
+        schedule_id: str | None = None,
+    ) -> dict[str, Any]:
+        """공유 일정 저장소에 일정 하나를 등록하거나 같은 ID의 일정을 갱신합니다."""
+
+        normalized_member_name = str(member_name or PERSONAL_SHARED_MEMBER_NAME).strip() or PERSONAL_SHARED_MEMBER_NAME
+        normalized_title = str(title or "제목 없음").strip() or "제목 없음"
+        normalized_date = normalize_external_date_bound(date)
+        if not normalized_date:
+            raise ValueError("date is required to create a shared schedule")
+        normalized_start_time = str(start_time or "미정").strip() or "미정"
+        normalized_end_time = str(end_time or "미정").strip() or "미정"
+        normalized_notes = notes or "공유 일정"
+        selected_schedule_id = schedule_id or new_id("shared")
+        sync_status = "created"
+
+        with self.connect() as conn:
+            existing = conn.execute(
+                "SELECT schedule_id FROM external_schedules WHERE schedule_id = ?",
+                (selected_schedule_id,),
+            ).fetchone()
+            if existing:
+                sync_status = "updated"
+            conn.execute(
+                """
+                INSERT INTO external_schedules
+                    (schedule_id, member_name, title, date, start_time, end_time, source_conversation_id, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(schedule_id) DO UPDATE SET
+                    member_name = excluded.member_name,
+                    title = excluded.title,
+                    date = excluded.date,
+                    start_time = excluded.start_time,
+                    end_time = excluded.end_time,
+                    source_conversation_id = excluded.source_conversation_id,
+                    notes = excluded.notes
+                """,
+                (
+                    selected_schedule_id,
+                    normalized_member_name,
+                    normalized_title,
+                    normalized_date,
+                    normalized_start_time,
+                    normalized_end_time,
+                    source_conversation_id,
+                    normalized_notes,
+                ),
+            )
+
+        return {
+            "schedule_id": selected_schedule_id,
+            "member_name": normalized_member_name,
+            "title": normalized_title,
+            "date": normalized_date,
+            "start_time": normalized_start_time,
+            "end_time": normalized_end_time,
+            "source_conversation_id": source_conversation_id,
+            "notes": normalized_notes,
+            "sync_status": sync_status,
+        }
+
+    def delete_shared_schedules(
+        self,
+        schedule_id: str | None = None,
+        source_conversation_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """공유 일정 저장소에서 ID 또는 원본 요청 ID에 해당하는 일정을 삭제합니다."""
+
+        if not schedule_id and not source_conversation_id:
+            return []
+
+        where: list[str] = []
+        params: list[Any] = []
+        if schedule_id:
+            where.append("schedule_id = ?")
+            params.append(schedule_id)
+        if source_conversation_id:
+            where.append("source_conversation_id = ?")
+            params.append(source_conversation_id)
+
+        with self.connect() as conn:
+            rows = rows_to_dicts(
                 conn.execute(
-                    "INSERT INTO external_schedules VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (new_id("extsch"), member_name, title, date, start_time, end_time, conversation_id, notes),
+                    f"""
+                    SELECT schedule_id, member_name, title, date, start_time, end_time, notes, source_conversation_id
+                    FROM external_schedules
+                    WHERE {" OR ".join(where)}
+                    """,
+                    params,
                 )
+            )
+            conn.execute(f"DELETE FROM external_schedules WHERE {' OR '.join(where)}", params)
+        return rows
 
     def search_previous_conversations(
         self,
@@ -582,10 +980,11 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
         terms = [term for term in query.replace(",", " ").split() if term]
         clauses: list[str] = []
         params: list[Any] = []
-        if member_names:
-            placeholders = ",".join("?" for _ in member_names)
+        if member_names is not None:
+            normalized_members = normalize_external_member_names(member_names)
+            placeholders = ",".join("?" for _ in normalized_members)
             clauses.append(f"c.member_name IN ({placeholders})")
-            params.extend(member_names)
+            params.extend(normalized_members)
         if terms:
             like_clause = " OR ".join(["m.content LIKE ? OR c.title LIKE ?" for _ in terms])
             clauses.append(f"({like_clause})")
@@ -619,10 +1018,12 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
 
     def extract_schedules_from_history(
         self,
-        member_names: list[str],
+        member_names: list[str] | None,
         date_from: str,
         date_to: str,
     ) -> list[dict[str, Any]]:
+        member_names = normalize_external_member_names(member_names)
+        date_from, date_to = normalize_external_schedule_date_bounds(member_names, date_from, date_to)
         placeholders = ",".join("?" for _ in member_names)
         with self.connect() as conn:
             cur = conn.execute(

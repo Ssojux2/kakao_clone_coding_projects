@@ -45,7 +45,7 @@ KANANA_ACTIVE_WEEK=6
 
 ### 학생용 배포본 만들기
 
-강사용 기준본은 모든 주차가 실제로 동작하는 완성본입니다. 학생에게 나눠줄 때는 아래 명령으로 핵심 구현부가 TODO로 바뀐 복사본을 생성합니다.
+강사용 기준본은 모든 주차가 실제로 동작하는 완성본입니다. 학생에게 나눠줄 때는 아래 명령으로 `@tool` 함수 구현부만 TODO로 바뀐 복사본을 생성합니다.
 
 ```bash
 ./run.sh --make-student-copy
@@ -100,7 +100,7 @@ conda 환경이 필요한 경우에는 기존 `environment.yml` 기반 runner를
   - Week 6 파일은 이전 주차 구현을 다시 작성하지 않고 Week 1-5 도구를 import해 sub-agent tool 목록을 조립합니다.
   - `find_common_available_slots`에서 busy-time rows를 공통 가능 시간 후보로 바꾸고, `propose_group_schedule`이 최종 결정 payload를 만듭니다.
 
-강사용 기준본은 실행 가능한 구현을 담고 있습니다. 학생용 배포본은 `scripts/make_student_distribution.py`가 주차별 핵심 구현부를 `NotImplementedError` TODO로 바꿉니다.
+강사용 기준본은 실행 가능한 구현을 담고 있습니다. 학생용 배포본은 `scripts/make_student_distribution.py`가 주차별 `@tool` 함수 구현부만 `NotImplementedError` TODO로 바꿉니다.
 
 ## 검증
 

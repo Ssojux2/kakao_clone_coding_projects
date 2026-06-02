@@ -52,6 +52,7 @@ def test_expected_tools_are_exposed_to_prompt_driven_agents() -> None:
     assert supervisor_tools == {"nana_agent", "kana_agent"}
     assert "personal_create_schedule" in nana_tools
     assert "save_structured_request" in nana_tools
+    assert "personal_update_saved_schedule" in nana_tools
     assert "search_nana_memory" in nana_tools
     assert "extract_schedule_request" in kana_tools
     assert "collect_member_schedules" in kana_tools
@@ -75,7 +76,7 @@ def test_week_tool_lists_accumulate_previous_weeks() -> None:
     assert week1 <= week2
     assert "extract_schedule_request" in week2
     assert week2 <= week3
-    assert {"save_structured_request", "list_saved_requests", "get_saved_request"} <= week3
+    assert {"save_structured_request", "list_saved_requests", "get_saved_request", "personal_update_saved_schedule"} <= week3
     assert week3 <= week4
     assert {"add_personal_reference", "search_nana_memory"} <= week4
     assert week4 <= week5
@@ -170,11 +171,11 @@ def test_delete_saved_schedules_by_filter_removes_matching_rows(tmp_path) -> Non
 
 
 def test_week6_common_slot_calculation_uses_busy_rows() -> None:
-    external_rows = extract_schedules_from_history_dict(["민준", "서연", "지훈"], "2000-01-01", "2999-12-31")
+    external_rows = extract_schedules_from_history_dict(["철수", "영희"], "2000-01-01", "2999-12-31")
     target_day = external_rows[0]["date"]
 
     result = find_common_available_slots_dict(
-        member_names=["A", "B", "C"],
+        member_names=["철수", "영희"],
         date_from=target_day,
         date_to=target_day,
         duration_minutes=60,
@@ -182,7 +183,7 @@ def test_week6_common_slot_calculation_uses_busy_rows() -> None:
     )
 
     assert result["tool_name"] == "find_common_available_slots"
-    assert result["members"] == ["나", "민준", "서연", "지훈"]
+    assert result["members"] == ["나", "철수", "영희"]
     assert result["candidate_slots"][0] == {
         "date": target_day,
         "start_time": "09:00",
@@ -190,7 +191,7 @@ def test_week6_common_slot_calculation_uses_busy_rows() -> None:
         "duration_minutes": 60,
         "reason": "수집된 busy-time과 겹치지 않는 공통 가능 시간입니다.",
     }
-    assert all(slot["start_time"] != "10:00" for slot in result["candidate_slots"])
+    assert all(slot["start_time"] != "11:00" for slot in result["candidate_slots"])
 
 
 def test_runtime_clock_uses_os_start_date() -> None:
