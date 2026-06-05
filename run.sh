@@ -12,8 +12,6 @@ Kanana Schedule Agent runner
 Usage:
   ./run.sh                 Sync uv env if needed, then run the Gradio app
   ./run.sh --install       Run uv sync, then run the Gradio app
-  ./run.sh --week N        Run the app with only Week 1-6 tools enabled
-  ./run.sh --test-week N   Run tests for one week and golden checks up to that week
   ./run.sh --golden        Run golden scenario tests with uv
   ./run.sh --test          Run pytest + golden scenario tests with uv
   ./run.sh --make-student-copy [DIR]
@@ -24,15 +22,6 @@ Usage:
 First-time setup:
   ./run.sh --install
 EOF
-}
-
-require_week() {
-  local week="${1:-}"
-  if [[ ! "$week" =~ ^[1-6]$ ]]; then
-    echo "주차는 1부터 6 사이 숫자로 입력해 주세요." >&2
-    usage >&2
-    exit 1
-  fi
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
@@ -58,21 +47,12 @@ run_uv() {
       uv sync
       uv run python app.py
       ;;
-    --week)
-      require_week "${2:-}"
-      KANANA_ACTIVE_WEEK="$2" uv run python app.py
-      ;;
-    --test-week)
-      require_week "${2:-}"
-      KANANA_ACTIVE_WEEK="$2" uv run pytest -q "tests/test_week$(printf '%02d' "$2")_"*.py
-      KANANA_ACTIVE_WEEK="$2" uv run python -m run_golden
-      ;;
     --golden)
-      KANANA_ACTIVE_WEEK=6 uv run python -m run_golden
+      uv run python -m run_golden
       ;;
     --test)
-      KANANA_ACTIVE_WEEK=6 uv run pytest -q
-      KANANA_ACTIVE_WEEK=6 uv run python -m run_golden
+      uv run pytest -q
+      uv run python -m run_golden
       ;;
     --make-student-copy)
       uv run python -m scripts.make_student_distribution "${2:-}"
@@ -122,21 +102,12 @@ run_conda() {
     --install)
       python app.py
       ;;
-    --week)
-      require_week "${2:-}"
-      KANANA_ACTIVE_WEEK="$2" python app.py
-      ;;
-    --test-week)
-      require_week "${2:-}"
-      KANANA_ACTIVE_WEEK="$2" pytest -q "tests/test_week$(printf '%02d' "$2")_"*.py
-      KANANA_ACTIVE_WEEK="$2" python -m run_golden
-      ;;
     --golden)
-      KANANA_ACTIVE_WEEK=6 python -m run_golden
+      python -m run_golden
       ;;
     --test)
-      KANANA_ACTIVE_WEEK=6 pytest -q
-      KANANA_ACTIVE_WEEK=6 python -m run_golden
+      pytest -q
+      python -m run_golden
       ;;
     --make-student-copy)
       python -m scripts.make_student_distribution "${2:-}"

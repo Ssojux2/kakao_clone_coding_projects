@@ -93,11 +93,12 @@ def test_week06_runtime_shared_schedule_lookup_includes_my_synced_schedule(tmp_p
     monkeypatch.setenv("KANANA_EXTERNAL_DB_PATH", str(tmp_path / "shared_with_me.sqlite3"))
     runtime = AgentRuntime()
     runtime.app_store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    target_day = runtime_clock.next_weekday_iso(1)
     runtime.app_store.save_structured_request(
         {
             "kind": "personal_schedule",
             "title": "전략 회의",
-            "date": "2026-06-03",
+            "date": target_day,
             "start_time": "10:00",
             "end_time": "11:00",
             "members": ["나"],
@@ -107,5 +108,5 @@ def test_week06_runtime_shared_schedule_lookup_includes_my_synced_schedule(tmp_p
     result = runtime.run_agent("공유 일정 조회해줘.", None)
 
     assert result.trace["mode"] == "mcp_direct_external_schedule_lookup"
-    assert "나 | 전략 회의 | 2026-06-03 10:00-11:00" in result.answer
+    assert f"나 | 전략 회의 | {target_day} 10:00-11:00" in result.answer
     assert "철수 | 영업 미팅" in result.answer

@@ -8,7 +8,6 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
-from fixed.config import CONFIG
 from golden_cases import GOLDEN_CASES
 from student_parts.week06_kanamate_decides_schedule import (
     agent_tool_names,
@@ -19,7 +18,6 @@ from student_parts.week06_kanamate_decides_schedule import (
 
 
 def main() -> int:
-    active_cases = [case for case in GOLDEN_CASES if case["week"] <= CONFIG.active_week]
     supervisor_tools = set(agent_tool_names("supervisor"))
     subagent_prompts = {
         "nana_agent": nana_system_prompt(),
@@ -32,7 +30,7 @@ def main() -> int:
     supervisor_prompt = supervisor_system_prompt()
 
     results = []
-    for case in active_cases:
+    for case in GOLDEN_CASES:
         expected_agent = case["expected_agent"]
         expected_tools = case.get("expected_tools") or [case["expected_tool"]]
         prompt = case["input"]

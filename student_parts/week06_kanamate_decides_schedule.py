@@ -17,9 +17,8 @@ from student_parts.week01_wake_up_nana import (
     personal_create_schedule,
     personal_delete_schedule,
     personal_list_schedules,
-    week01_tools,
 )
-from student_parts.week02_structure_natural_language_requests import extract_structured_request, week02_tools
+from student_parts.week02_structure_natural_language_requests import extract_structured_request
 from student_parts.week03_build_nanas_logbook import (
     delete_saved_schedules_dict,
     get_saved_request,
@@ -27,7 +26,6 @@ from student_parts.week03_build_nanas_logbook import (
     personal_delete_saved_schedules,
     personal_list_saved_schedules,
     save_structured_request,
-    week03_tools,
 )
 from student_parts import week03_build_nanas_logbook as week03_store
 from student_parts.week04_retrieve_nanas_memory import (
@@ -41,7 +39,6 @@ from student_parts.week05_load_kanas_past_conversations import (
     extract_schedules_from_history,
     load_conversation_messages,
     search_previous_conversations,
-    week05_tools,
 )
 
 
@@ -81,53 +78,32 @@ def _chat_model() -> ChatOpenAI:
 
 
 def _harness_examples_text() -> str:
-    examples = [example for example in harness_prompt_examples() if example["week"] <= CONFIG.active_week]
-    return json.dumps(examples, ensure_ascii=False, indent=2)
+    return json.dumps(harness_prompt_examples(), ensure_ascii=False, indent=2)
 
 
 def _nana_capability_text() -> str:
     # [수강생 참고 코드 포인트]
-    # active_week에 따라 Nana가 알고 있어야 할 tool 설명만 누적합니다.
     # prompt에는 tool 이름과 사용 조건을 구체적으로 써야 LLM이 올바른 tool chain을 선택합니다.
     parts = [
         "Week 1 개인 일정 생성/조회/삭제는 personal_create_schedule, personal_list_schedules, "
-        "personal_delete_schedule을 사용한다."
+        "personal_delete_schedule을 사용한다.",
+        "Week 2 날짜/시간/종류/멤버 판단이 필요하면 extract_schedule_request를 호출한다.",
+        "Week 3 저장/조회는 save_structured_request, list_saved_requests, get_saved_request를 사용한다.",
+        "일정 삭제 요청이면 personal_list_saved_schedules로 후보를 확인하고 "
+        "personal_delete_saved_schedules를 호출한다.",
+        "일정 수정 요청이면 personal_list_saved_schedules로 내 앱 DB 일정 원본 후보를 확인하고 "
+        "schedule_id를 고른 뒤 personal_update_saved_schedule을 호출한다. "
+        "공유 일정은 내 일정 원본 수정 결과에 맞춰 자동 갱신되므로 공유 일정만 단독으로 고치지 않는다.",
+        "Week 4 RAG 검색은 search_nana_memory 하나를 사용한다. 사용자 질문 전체가 아니라 "
+        "네가 고른 핵심 키워드/날짜/참석자를 넣고, 반환된 reference_hits, schedule_chunks, context를 근거로 답한다.",
+        "개인 참고자료 추가가 필요할 때만 add_personal_reference를 사용한다.",
     ]
-    if CONFIG.active_week >= 2:
-        parts.append("Week 2 날짜/시간/종류/멤버 판단이 필요하면 extract_schedule_request를 호출한다.")
-    if CONFIG.active_week >= 3:
-        parts.append(
-            "Week 3 저장/조회는 save_structured_request, list_saved_requests, get_saved_request를 사용한다."
-        )
-        parts.append(
-            "일정 삭제 요청이면 personal_list_saved_schedules로 후보를 확인하고 "
-            "personal_delete_saved_schedules를 호출한다."
-        )
-        parts.append(
-            "일정 수정 요청이면 personal_list_saved_schedules로 내 앱 DB 일정 원본 후보를 확인하고 "
-            "schedule_id를 고른 뒤 personal_update_saved_schedule을 호출한다. "
-            "공유 일정은 내 일정 원본 수정 결과에 맞춰 자동 갱신되므로 공유 일정만 단독으로 고치지 않는다."
-        )
-    if CONFIG.active_week >= 4:
-        parts.append(
-            "Week 4 RAG 검색은 search_nana_memory 하나를 사용한다. 사용자 질문 전체가 아니라 "
-            "네가 고른 핵심 키워드/날짜/참석자를 넣고, 반환된 reference_hits, schedule_chunks, context를 근거로 답한다."
-        )
-        parts.append("개인 참고자료 추가가 필요할 때만 add_personal_reference를 사용한다.")
     return " ".join(parts)
 
 
 def _nana_workflow_text() -> str:
     # [수강생 참고 코드 포인트]
-    # 개인 일정 생성 workflow는 주차가 올라갈수록 "구조화 -> 생성 -> 저장"으로 확장됩니다.
-    # Week 3 이후에는 personal_create_schedule 결과의 structured_request를 save_structured_request로 넘겨야 합니다.
-    if CONFIG.active_week <= 1:
-        return "개인 일정 생성 요청이면 사용자의 프롬프트에서 필요한 값을 읽어 personal_create_schedule을 호출한다."
-    if CONFIG.active_week == 2:
-        return (
-            "개인 일정 생성 요청이면 먼저 extract_schedule_request로 날짜/시간/제목을 구조화하고, "
-            "그 결과를 바탕으로 personal_create_schedule을 호출한다."
-        )
+    # 완성본에서는 개인 일정 생성 workflow가 "구조화 -> 생성 -> 저장"까지 항상 열립니다.
     return (
         "개인 일정 생성 요청이면 extract_schedule_request 결과를 바탕으로 personal_create_schedule을 호출하고, "
         "personal_create_schedule 결과의 structured_request를 save_structured_request payload로 전달해 앱 DB에 저장한다. "
@@ -137,10 +113,7 @@ def _nana_workflow_text() -> str:
 
 def _kana_capability_text() -> str:
     # [수강생 참고 코드 포인트]
-    # Kana는 여러 사람 일정만 담당합니다.
-    # Week 5에서는 외부 대화/일정 수집, Week 6에서는 공통 후보 계산과 최종 제안을 추가로 설명합니다.
-    if CONFIG.active_week < 5:
-        return "Kana 도구는 Week 5부터 열린다."
+    # Kana는 여러 사람 일정만 담당하며, 완성본에서는 그룹 일정 결정 도구까지 항상 열립니다.
     parts = [
         "먼저 extract_schedule_request로 날짜와 멤버를 구조화한다.",
         "이전 대화 원문이 필요하면 search_previous_conversations나 load_conversation_messages를 쓴다.",
@@ -150,12 +123,9 @@ def _kana_capability_text() -> str:
         "외부 팀원 일정 조회 답변은 tool 결과의 schedule_summary 또는 rows를 기준으로 모든 일정을 빠짐없이 나열한다. "
         "각 일정마다 반드시 멤버, 제목, 날짜, 시작 시간, 종료 시간, 비고를 포함한다. "
         "rows에 해당 멤버 일정이 있으면 일정이 없다고 말하지 않는다.",
+        "공통 후보 시간 계산은 find_common_available_slots를 사용하고, 선택한 시간을 "
+        "selected_slot으로 만들어 propose_group_schedule에 전달한다.",
     ]
-    if CONFIG.active_week >= 6:
-        parts.append(
-            "공통 후보 시간 계산은 find_common_available_slots를 사용하고, 선택한 시간을 "
-            "selected_slot으로 만들어 propose_group_schedule에 전달한다."
-        )
     return " ".join(parts)
 
 
@@ -200,7 +170,6 @@ def supervisor_system_prompt() -> str:
         f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
         "오늘/내일/다음 주 같은 상대 날짜는 이 날짜를 기준으로 해석한다. "
         "주차, 에이전트, 도구를 미리 고르지 않는다. 너는 사용자 프롬프트와 아래 하네스 예시를 읽고 "
-        f"현재 활성 주차는 Week {CONFIG.active_week}이다. "
         "Week 1-4의 개인 일정/저장/RAG 흐름은 nana_agent에, Week 5-6의 여러 사람 일정/외부 대화/그룹 조율 흐름은 "
         "kana_agent에 맡긴다. 반드시 nana_agent 또는 kana_agent 도구 중 하나를 직접 호출한 뒤, "
         "그 도구 결과만 근거로 최종 답변을 작성한다. "
@@ -442,41 +411,28 @@ def find_common_available_slots(
 
 def nana_tools() -> list[Any]:
     # [수강생 참고 코드 포인트]
-    # active_week에 맞춰 Nana에게 공개할 tool 목록을 고릅니다.
-    # Week 4 이후에도 Nana는 개인 일정/RAG tool만 담당하고 그룹 조율 tool은 받지 않습니다.
-    if CONFIG.active_week <= 1:
-        return week01_tools()
-    if CONFIG.active_week == 2:
-        return week02_tools()
-    if CONFIG.active_week == 3:
-        return week03_tools()
+    # Nana는 개인 일정/RAG tool만 담당하고 그룹 조율 tool은 받지 않습니다.
     return week04_tools()
 
 
 def kana_tools() -> list[Any]:
     # [수강생 참고 코드 포인트]
-    # Week 5부터 Kana tool이 열립니다.
-    # Week 6에서는 find_common_available_slots와 propose_group_schedule을 추가해 최종 결정까지 맡깁니다.
-    if CONFIG.active_week < 5:
-        return []
-    tools = [
+    # Kana는 외부 대화/일정 수집부터 최종 그룹 일정 제안까지 맡깁니다.
+    return [
         extract_schedule_request,
         search_previous_conversations,
         load_conversation_messages,
         extract_schedules_from_history,
         collect_member_schedules,
+        find_common_available_slots,
+        propose_group_schedule,
     ]
-    if CONFIG.active_week >= 6:
-        tools.extend([find_common_available_slots, propose_group_schedule])
-    return tools
 
 
 def supervisor_tools() -> list[Any]:
     # [수강생 참고 코드 포인트]
     # supervisor에게는 하위 agent 위임 tool만 노출합니다.
     # 이렇게 해야 supervisor가 세부 CRUD/RAG/MCP tool을 직접 호출하지 않습니다.
-    if CONFIG.active_week < 5:
-        return [nana_agent]
     return [nana_agent, kana_agent]
 
 

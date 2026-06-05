@@ -29,19 +29,9 @@ OPENAI_MODEL=gpt-4o-mini
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 KANANA_USE_LLM=1
 KANANA_LLM_ASSIST=1
-KANANA_ACTIVE_WEEK=6
 ```
 
 메인 채팅 화면은 `OPENAI_API_KEY`가 있어야 동작합니다. 메인 런타임은 주차나 tool을 고르지 않고, LangChain supervisor prompt가 `golden_cases.py`의 하네스 예시를 참고해 `nana_agent` 또는 `kana_agent` tool을 호출합니다. 각 sub-agent도 자기 prompt와 tool 목록을 기준으로 structured output, 일정 CRUD, SQLite 저장/조회, RAG 검색, MCP 검색, 그룹 일정 제안을 수행합니다. Week 2 structured output tool은 조건문 분류기 없이 LangChain/OpenAI structured output 경로를 사용합니다.
-
-수업 중 특정 주차까지만 기능을 열어 보려면 `KANANA_ACTIVE_WEEK` 또는 runner 옵션을 사용합니다.
-
-```bash
-./run.sh --week 3
-./run.sh --test-week 3
-```
-
-`--week N`은 앱에서 Week N까지의 도구만 노출하고, `--test-week N`은 해당 주차 테스트와 Week N까지의 golden wiring만 확인합니다.
 
 ### 학생용 배포본 만들기
 
@@ -119,12 +109,6 @@ pytest 기반 하네스 테스트까지 함께 확인하려면 아래 명령을 
 `--test`는 pytest가 하네스 프롬프트, agent prompt/tool wiring, prompt-driven runtime trace 형식을 확인한 뒤 golden harness 검증을 이어서 실행합니다.
 
 Week 2 structured output과 Week 4 ChromaDB reference 검색 테스트는 실제 OpenAI API를 호출합니다. `.env`에 `OPENAI_API_KEY`가 없으면 해당 테스트는 실패합니다.
-
-주차별 미션만 빠르게 확인할 때는 아래처럼 실행합니다.
-
-```bash
-./run.sh --test-week 4
-```
 
 ## 공식 문서 기준
 

@@ -26,20 +26,10 @@ class AppConfig:
     app_db_path: Path
     external_db_path: Path
     chroma_dir: Path
-    active_week: int
 
     @property
     def has_openai_key(self) -> bool:
         return bool(self.openai_api_key)
-
-
-def _active_week_from_env() -> int:
-    raw_value = os.getenv("KANANA_ACTIVE_WEEK", "6")
-    try:
-        value = int(raw_value)
-    except ValueError:
-        value = 6
-    return max(1, min(value, 6))
 
 
 def load_config() -> AppConfig:
@@ -64,7 +54,6 @@ def load_config() -> AppConfig:
         app_db_path=DATA_DIR / "kanana_app.sqlite3",
         external_db_path=DATA_DIR / "kanana_external_people.sqlite3",
         chroma_dir=DATA_DIR / "chroma",
-        active_week=_active_week_from_env(),
     )
 
 

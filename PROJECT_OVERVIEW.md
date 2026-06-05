@@ -61,9 +61,8 @@
 1. [README.md](README.md)에서 실행 방법과 환경 변수를 확인합니다.
 2. 이 문서의 "30초 요약"과 "전체 실행 흐름"을 먼저 봅니다.
 3. `student_parts/weekXX_*.py` 파일을 열고 `@tool` 함수 안의 `# [STUDENT TODO]` 주석을 찾습니다.
-4. `./run.sh --test-week N`으로 현재 주차 구현이 통과하는지 확인합니다.
-5. `./run.sh --test` 또는 `./run.sh --golden`으로 전체 기준본이 통과하는지 확인합니다.
-6. 앱을 실행한 뒤 "상세" 탭에서 마지막 Agent 실행 trace를 확인합니다.
+4. `./run.sh --test` 또는 `./run.sh --golden`으로 전체 기준본이 통과하는지 확인합니다.
+5. 앱을 실행한 뒤 "상세" 탭에서 마지막 Agent 실행 trace를 확인합니다.
 
 Week 4의 개인 참고자료 add/search는 ChromaDB collection과 OpenAI embedding adapter를 사용하므로 `.env`에 `OPENAI_API_KEY`가 있어야 실제 reference add/search가 동작합니다. `OPENAI_EMBEDDING_MODEL`을 바꾸면 새 embedding collection 기준으로 참고자료를 다시 쌓아야 할 수 있습니다. Week 4 tool 결과의 `reference_backend`에서 vector store와 embedding model을 확인할 수 있습니다.
 
@@ -76,22 +75,10 @@ Week 4의 개인 참고자료 add/search는 ChromaDB collection과 OpenAI embedd
 Gradio 앱을 실행합니다.
 
 ```bash
-./run.sh --week 3
-```
-
-Week 3까지의 도구만 열린 상태로 앱을 실행합니다.
-
-```bash
 ./run.sh --test
 ```
 
 pytest 단위 테스트를 실행한 뒤 golden scenario를 이어서 확인합니다.
-
-```bash
-./run.sh --test-week 3
-```
-
-Week 3 테스트와 Week 3까지의 golden wiring만 확인합니다.
 
 ```bash
 ./run.sh --golden

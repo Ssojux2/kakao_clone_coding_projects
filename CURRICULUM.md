@@ -94,14 +94,12 @@
 
 - Week 1-2는 함수 실행 결과와 JSON payload 모양을 먼저 확인합니다.
 - Week 3 이후는 `./run.sh --test`를 자동 검증 기준으로 사용합니다.
-- 수업 중에는 `./run.sh --test-week N`으로 해당 주차 테스트와 Week N까지의 golden wiring만 확인합니다.
 - Week 6 마지막에는 `./run.sh --golden`으로 전체 scenario가 깨지지 않았는지 확인합니다.
 
 ## 강사용 준비물
 
 - 강사용 기준본은 실제 OpenAI/SQLite/ChromaDB 경로가 동작하는 완성본으로 유지하고, 학생용 배포본은 `./run.sh --make-student-copy`로 생성합니다.
 - 학생용 배포본에서는 `student_parts/`의 `@tool` 함수 구현부만 `NotImplementedError` TODO로 바뀝니다.
-- 주차별 앱 실행은 `./run.sh --week N`, 주차별 검증은 `./run.sh --test-week N`을 사용합니다.
 - 수업 전 `./run.sh --test`로 기준본이 통과하는지 확인합니다.
 - Week 2와 Week 4 검증은 실제 OpenAI API를 호출하므로 수업 전 `.env`의 `OPENAI_API_KEY`를 확인합니다.
 - Week 3 이후에는 DB row가 누적될 수 있으므로 수업용 DB를 초기화하거나 복사본을 준비합니다.

@@ -271,14 +271,12 @@ def build_student_distribution(target: Path) -> None:
                 "tool annotation이 붙지 않은 helper, schema, prompt, tool-list 함수는 참고 코드로 남겨 둡니다.",
                 "각 TODO에는 구현 순서가 주석으로 붙어 있습니다. 수업에서는 `@tool` 함수의 입력/출력 JSON 계약을 먼저 맞추세요.",
                 "",
-                "주차별 실행:",
+                "실행과 검증:",
                 "",
                 "```bash",
-                "./run.sh --week 1",
-                "./run.sh --test-week 1",
+                "./run.sh",
+                "./run.sh --test",
                 "```",
-                "",
-                "`KANANA_ACTIVE_WEEK` 값을 1부터 6까지 바꾸면 현재 주차까지의 도구만 노출됩니다.",
             ]
         )
         + "\n",
