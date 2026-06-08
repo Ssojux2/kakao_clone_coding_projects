@@ -30,7 +30,8 @@ GOLDEN_CASES = [
         "week": 4,
         "input": "내 회의 선호 참고자료와 저장된 일정을 같이 검색해줘",
         "expected_agent": "nana_agent",
-        "expected_tool": "search_nana_memory",
+        "expected_tool": "search_personal_references",
+        "expected_tools": ["search_personal_references", "search_saved_requests"],
     },
     {
         "id": "week5_mcp_sqlite",
@@ -44,8 +45,8 @@ GOLDEN_CASES = [
         "week": 6,
         "input": "철수 영희와 다음 주 회의 시간을 잡아줘",
         "expected_agent": "kana_agent",
-        "expected_tool": "propose_group_schedule",
-        "expected_tools": ["collect_member_schedules", "find_common_available_slots", "propose_group_schedule"],
+        "expected_tool": "decide_final_slot",
+        "expected_tools": ["search_previous_conversations", "extract_schedules_from_history", "decide_final_slot"],
     },
     {
         "id": "week6_nana_personal",

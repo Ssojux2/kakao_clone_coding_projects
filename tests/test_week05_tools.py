@@ -262,13 +262,13 @@ def test_week05_mcp_stdio_server_returns_cheolsu_younghee_schedules(tmp_path) ->
     assert {row["member_name"] for row in payload["rows"]} == {"철수", "영희"}
     assert {row["title"] for row in payload["rows"]} == {"영업 미팅", "파트너 콜", "리서치 리뷰", "마케팅 싱크", "콘텐츠 점검"}
     assert "철수 | 영업 미팅 |" in payload["schedule_summary"]
-    assert "2026-06-09 11:00-12:00" in payload["schedule_summary"]
+    assert f"{runtime_clock.next_weekday_iso(1)} 11:00-12:00" in payload["schedule_summary"]
     assert "영희 | 리서치 리뷰 |" in payload["schedule_summary"]
-    assert "2026-06-10 13:00-14:00" in payload["schedule_summary"]
+    assert f"{runtime_clock.next_weekday_iso(2)} 13:00-14:00" in payload["schedule_summary"]
     assert "영희 | 마케팅 싱크 |" in payload["schedule_summary"]
-    assert "2026-06-10 15:00-16:00" in payload["schedule_summary"]
+    assert f"{runtime_clock.next_weekday_iso(2)} 15:00-16:00" in payload["schedule_summary"]
     assert "영희 | 콘텐츠 점검 |" in payload["schedule_summary"]
-    assert "2026-06-11 16:00-17:00" in payload["schedule_summary"]
+    assert f"{runtime_clock.next_weekday_iso(3)} 16:00-17:00" in payload["schedule_summary"]
 
 
 def test_week05_default_external_lookup_expands_next_tuesday_to_thursday(tmp_path) -> None:

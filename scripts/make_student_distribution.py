@@ -39,7 +39,8 @@ TODO_TARGETS: dict[str, dict[str, str]] = {
     },
     "student_parts/week04_retrieve_nanas_memory.py": {
         "add_personal_reference": "Week 4: 개인 참고자료를 ChromaDB에 저장하세요.",
-        "search_nana_memory": "Week 4: 참고자료 검색, SQLite 일정 검색, chunk 변환, context 조립을 구현하세요.",
+        "search_personal_references": "Week 4: ChromaDB 개인 참고자료 검색 결과를 hits payload로 반환하세요.",
+        "search_saved_requests": "Week 4: SQLite 저장 요청 검색 결과를 rows payload로 반환하세요.",
     },
     "student_parts/week05_load_kanas_past_conversations.py": {
         "search_previous_conversations": "Week 5: 외부 SQLite/MCP 대화 검색 tool을 구현하세요.",
@@ -52,8 +53,7 @@ TODO_TARGETS: dict[str, dict[str, str]] = {
     "student_parts/week06_kanamate_decides_schedule.py": {
         "personal_delete_schedule_by_query": "Week 6: 기존 삭제 helper를 JSON tool로 감싸 호환성을 유지하세요.",
         "extract_schedule_request": "Week 6: Kana가 사용할 구조화 요청 tool wrapper를 구현하세요.",
-        "find_common_available_slots": "Week 6: 공통 가능 시간 후보 계산 tool payload를 반환하세요.",
-        "propose_group_schedule": "Week 6: 선택된 후보 시간을 최종 결정 payload로 포장하세요.",
+        "decide_final_slot": "Week 6: 선택된 후보 시간을 final_slot payload로 포장하세요.",
         "nana_agent": "Week 6: supervisor가 위임한 개인 일정 요청을 Nana sub-agent로 실행하세요.",
         "kana_agent": "Week 6: supervisor가 위임한 그룹 일정 요청을 Kana sub-agent로 실행하세요.",
     },
@@ -114,10 +114,13 @@ TODO_GUIDES: dict[str, dict[str, list[str]]] = {
             "REFERENCE_STORE.add_personal_reference에 title/content/tags를 저장하세요.",
             "reference_backend와 저장된 reference를 함께 반환하세요.",
         ],
-        "search_nana_memory": [
-            "limit을 보정하고 ChromaDB 개인 참고자료를 먼저 검색하세요.",
-            "SQLite schedules 테이블을 query/date/attendee 조건으로 조회한 뒤 각 row를 schedule_chunks로 변환하세요.",
-            "reference_hits와 schedule_chunks를 사람이 읽을 수 있는 context 문자열로 조립해 반환하세요.",
+        "search_personal_references": [
+            "REFERENCE_STORE.search_personal_references를 호출해 개인 참고자료 hit를 얻으세요.",
+            "course repo 노트북과 맞춰 top-level hits 배열을 JSON 문자열로 반환하세요.",
+        ],
+        "search_saved_requests": [
+            "SQLITE_STORE.search_saved_requests를 query/top_k 조건으로 호출하세요.",
+            "course repo 노트북과 맞춰 top-level rows 배열을 JSON 문자열로 반환하세요.",
         ],
     },
     "student_parts/week05_load_kanas_past_conversations.py": {
@@ -155,20 +158,18 @@ TODO_GUIDES: dict[str, dict[str, list[str]]] = {
             "extract_structured_request(query)를 호출해 StructuredRequest 모델을 얻으세요.",
             "base_date와 structured_request.model_dump()를 포함한 JSON 문자열을 반환하세요.",
         ],
-        "find_common_available_slots": [
-            "find_common_available_slots_dict 결과를 JSON 문자열로 감싸는 @tool wrapper를 작성하세요.",
-        ],
-        "propose_group_schedule": [
-            "selected_slot이 있으면 그것을, 없으면 candidate_slots의 첫 번째 값을 선택하세요.",
-            "선택된 시간이 있으면 status=confirmed, 없으면 needs_manual_review로 final_decision을 만드세요.",
+        "decide_final_slot": [
+            "candidate_slots가 들어오면 첫 번째 후보를 최종 시간으로 선택하세요.",
+            "후보가 없고 member_names/date_from/date_to가 있으면 기존 공통 시간 계산 helper를 사용하세요.",
+            "course repo 노트북과 맞춰 final_slot, reason, candidates를 JSON 문자열로 반환하세요.",
         ],
         "nana_agent": [
             "build_nana_subagent().invoke로 query를 전달하고 answer, trace, inner_tool_names를 JSON으로 반환하세요.",
             "OPENAI_API_KEY가 없을 때는 실패 payload를 반환하세요.",
         ],
         "kana_agent": [
-            "build_kana_subagent().invoke로 query를 전달하고 trace에서 final_decision을 찾아 끌어올리세요.",
-            "answer, trace, inner_tool_names, final_decision_payload를 JSON으로 반환하세요.",
+            "build_kana_subagent().invoke로 query를 전달하고 trace에서 final_slot payload를 찾아 끌어올리세요.",
+            "answer, trace, inner_tool_names, final_slot_payload를 JSON으로 반환하세요.",
         ],
     },
 }

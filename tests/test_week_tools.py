@@ -53,11 +53,11 @@ def test_expected_tools_are_exposed_to_prompt_driven_agents() -> None:
     assert "personal_create_schedule" in nana_tools
     assert "save_structured_request" in nana_tools
     assert "personal_update_saved_schedule" in nana_tools
-    assert "search_nana_memory" in nana_tools
+    assert "search_personal_references" in nana_tools
+    assert "search_saved_requests" in nana_tools
     assert "extract_schedule_request" in kana_tools
     assert "collect_member_schedules" in kana_tools
-    assert "find_common_available_slots" in kana_tools
-    assert "propose_group_schedule" in kana_tools
+    assert "decide_final_slot" in kana_tools
 
     for case in GOLDEN_CASES:
         expected_tools = case.get("expected_tools") or [case["expected_tool"]]
@@ -78,7 +78,7 @@ def test_week_tool_lists_accumulate_previous_weeks() -> None:
     assert week2 <= week3
     assert {"save_structured_request", "list_saved_requests", "get_saved_request", "personal_update_saved_schedule"} <= week3
     assert week3 <= week4
-    assert {"add_personal_reference", "search_nana_memory"} <= week4
+    assert {"add_personal_reference", "search_personal_references", "search_saved_requests"} <= week4
     assert week4 <= week5
     assert {"search_previous_conversations", "extract_schedules_from_history", "collect_member_schedules"} <= week5
 

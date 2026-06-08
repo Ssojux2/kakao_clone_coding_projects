@@ -28,11 +28,7 @@ from student_parts.week03_build_nanas_logbook import (
     save_structured_request,
 )
 from student_parts import week03_build_nanas_logbook as week03_store
-from student_parts.week04_retrieve_nanas_memory import (
-    add_personal_reference,
-    search_nana_memory,
-    week04_tools,
-)
+from student_parts.week04_retrieve_nanas_memory import week04_tools
 from student_parts.week05_load_kanas_past_conversations import (
     _normalize_members,
     collect_member_schedules,
@@ -94,8 +90,8 @@ def _nana_capability_text() -> str:
         "일정 수정 요청이면 personal_list_saved_schedules로 내 앱 DB 일정 원본 후보를 확인하고 "
         "schedule_id를 고른 뒤 personal_update_saved_schedule을 호출한다. "
         "공유 일정은 내 일정 원본 수정 결과에 맞춰 자동 갱신되므로 공유 일정만 단독으로 고치지 않는다.",
-        "Week 4 RAG 검색은 search_nana_memory 하나를 사용한다. 사용자 질문 전체가 아니라 "
-        "네가 고른 핵심 키워드/날짜/참석자를 넣고, 반환된 reference_hits, schedule_chunks, context를 근거로 답한다.",
+        "Week 4 RAG 검색은 course repo 기준 tool인 search_personal_references와 search_saved_requests를 구분해 사용한다. "
+        "개인 참고자료 질문은 search_personal_references의 hits를, 저장된 일정/할 일/알림 질문은 search_saved_requests의 rows를 근거로 답한다.",
         "개인 참고자료 추가가 필요할 때만 add_personal_reference를 사용한다.",
     ]
     return " ".join(parts)
@@ -123,8 +119,11 @@ def _kana_capability_text() -> str:
         "외부 팀원 일정 조회 답변은 tool 결과의 schedule_summary 또는 rows를 기준으로 모든 일정을 빠짐없이 나열한다. "
         "각 일정마다 반드시 멤버, 제목, 날짜, 시작 시간, 종료 시간, 비고를 포함한다. "
         "rows에 해당 멤버 일정이 있으면 일정이 없다고 말하지 않는다.",
-        "공통 후보 시간 계산은 find_common_available_slots를 사용하고, 선택한 시간을 "
-        "selected_slot으로 만들어 propose_group_schedule에 전달한다.",
+        "팀원들과 회의 시간을 결정하는 요청이면 search_previous_conversations, extract_schedules_from_history, "
+        "decide_final_slot을 이 순서로 호출하는 course repo 흐름을 우선한다.",
+        "최종 회의 시간 결정은 course repo 기준 tool인 decide_final_slot을 사용하고, "
+        "후보 문자열이 있으면 candidate_slots로 넘기고, 후보가 없으면 member_names/date_from/date_to를 넘겨 내부 공통 시간 계산을 사용한다. "
+        "결과의 final_slot, reason, candidates를 근거로 답한다.",
     ]
     return " ".join(parts)
 
@@ -409,6 +408,90 @@ def find_common_available_slots(
     )
 
 
+def _slot_to_text(slot: Any) -> str:
+    if isinstance(slot, str):
+        return slot
+    if not isinstance(slot, dict):
+        return str(slot)
+    date_text = slot.get("date") or "날짜 미정"
+    start_time = slot.get("start_time") or "시간 미정"
+    end_time = slot.get("end_time")
+    return f"{date_text} {start_time}-{end_time}" if end_time else f"{date_text} {start_time}"
+
+
+def decide_final_slot_dict(
+    candidate_slots: list[Any] | None = None,
+    member_names: list[str] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    duration_minutes: int = 60,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Course repo 기준 final_slot payload를 만들되 기존 후보 계산 기능을 재사용합니다."""
+
+    slots = list(candidate_slots or [])
+    computed: dict[str, Any] | None = None
+    if not slots and member_names and date_from and date_to:
+        computed = find_common_available_slots_dict(
+            member_names=member_names,
+            date_from=date_from,
+            date_to=date_to,
+            duration_minutes=duration_minutes,
+            limit=5,
+        )
+        slots = list(computed.get("candidate_slots") or [])
+
+    selected = slots[0] if slots else None
+    candidates = [_slot_to_text(slot) for slot in slots]
+    final_slot = _slot_to_text(selected) if selected else None
+    if reason:
+        final_reason = reason
+    elif isinstance(selected, dict) and selected.get("reason"):
+        final_reason = str(selected["reason"])
+    elif selected:
+        final_reason = "내 개인 일정과 팀원 가능 시간이 모두 충돌하지 않는 첫 후보입니다."
+    else:
+        final_reason = "공통 가능 시간을 찾지 못했습니다."
+    payload: dict[str, Any] = {
+        "final_slot": final_slot,
+        "reason": final_reason,
+        "candidates": candidates,
+    }
+    if computed:
+        payload["members"] = computed.get("members")
+        payload["busy_rows"] = computed.get("busy_rows", [])
+        payload["candidate_slots"] = computed.get("candidate_slots", [])
+    elif slots and any(isinstance(slot, dict) for slot in slots):
+        payload["candidate_slots"] = slots
+    return payload
+
+
+@tool
+def decide_final_slot(
+    candidate_slots: list[Any] | None = None,
+    member_names: list[str] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    duration_minutes: int = 60,
+    reason: str | None = None,
+) -> str:
+    """내 일정과 팀원 가능 시간을 비교해 최종 회의 시간을 결정합니다."""
+
+    # [수강생 구현 포인트]
+    # course repo 노트북과 맞춰 top-level final_slot/reason/candidates payload를 반환합니다.
+    return json.dumps(
+        decide_final_slot_dict(
+            candidate_slots=candidate_slots,
+            member_names=member_names,
+            date_from=date_from,
+            date_to=date_to,
+            duration_minutes=duration_minutes,
+            reason=reason,
+        ),
+        ensure_ascii=False,
+    )
+
+
 def nana_tools() -> list[Any]:
     # [수강생 참고 코드 포인트]
     # Nana는 개인 일정/RAG tool만 담당하고 그룹 조율 tool은 받지 않습니다.
@@ -417,15 +500,14 @@ def nana_tools() -> list[Any]:
 
 def kana_tools() -> list[Any]:
     # [수강생 참고 코드 포인트]
-    # Kana는 외부 대화/일정 수집부터 최종 그룹 일정 제안까지 맡깁니다.
+    # Kana는 외부 대화/일정 수집부터 course repo 기준 최종 시간 결정까지 맡깁니다.
     return [
         extract_schedule_request,
         search_previous_conversations,
         load_conversation_messages,
         extract_schedules_from_history,
         collect_member_schedules,
-        find_common_available_slots,
-        propose_group_schedule,
+        decide_final_slot,
     ]
 
 
@@ -541,7 +623,7 @@ def kana_agent(query: str) -> str:
     """그룹 일정 종합 작업을 프롬프트 기반 Kana 하위 에이전트에게 위임합니다."""
 
     # [수강생 구현 포인트]
-    # Kana trace 안에서 propose_group_schedule 결과를 찾아 final_decision_payload로 끌어올립니다.
+    # Kana trace 안에서 decide_final_slot 결과를 찾아 final_slot_payload로 끌어올립니다.
     if not CONFIG.has_openai_key:
         return json.dumps(
             {
@@ -551,6 +633,7 @@ def kana_agent(query: str) -> str:
                 "answer": "Kana 하위 에이전트는 프롬프트 기반 도구 호출로 동작하므로 OPENAI_API_KEY가 필요합니다.",
                 "trace": [],
                 "inner_tool_names": [],
+                "final_slot_payload": None,
                 "final_decision_payload": None,
                 "mode": "prompt_driven_subagent",
             },
@@ -558,9 +641,12 @@ def kana_agent(query: str) -> str:
         )
     result = build_kana_subagent().invoke({"messages": [{"role": "user", "content": query}]})
     trace = _extract_agent_trace(result)
+    final_slot = None
     final_decision = None
     for event in trace:
         content = event.get("content")
+        if isinstance(content, dict) and "final_slot" in content:
+            final_slot = content
         if isinstance(content, dict) and content.get("final_decision"):
             final_decision = content["final_decision"]
     return json.dumps(
@@ -570,6 +656,7 @@ def kana_agent(query: str) -> str:
             "answer": _extract_final_text(result),
             "trace": trace,
             "inner_tool_names": _tool_call_names(trace),
+            "final_slot_payload": final_slot,
             "final_decision_payload": final_decision,
             "mode": "prompt_driven_subagent",
         },

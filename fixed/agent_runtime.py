@@ -144,6 +144,7 @@ class AgentRuntime:
                 ],
                 "supervisor_selected_agent": "kana_agent",
                 "inner_tool_names": ["extract_schedules_from_history"],
+                "final_slot_payload": None,
                 "final_decision_payload": None,
             },
             conversation_id="",
@@ -273,6 +274,7 @@ class AgentRuntime:
                 )
 
         inner_tool_names: list[str] = []
+        final_slot_payload: dict[str, Any] | None = None
         final_decision_payload: dict[str, Any] | None = None
         selected_agent: str | None = None
         for event in events:
@@ -281,6 +283,10 @@ class AgentRuntime:
             content = event.get("content")
             if isinstance(content, dict):
                 inner_tool_names.extend(content.get("inner_tool_names") or [])
+                if content.get("final_slot_payload"):
+                    final_slot_payload = content["final_slot_payload"]
+                elif "final_slot" in content:
+                    final_slot_payload = content
                 if content.get("final_decision_payload"):
                     final_decision_payload = content["final_decision_payload"]
 
@@ -288,5 +294,6 @@ class AgentRuntime:
             "events": events,
             "supervisor_selected_agent": selected_agent,
             "inner_tool_names": inner_tool_names,
+            "final_slot_payload": final_slot_payload,
             "final_decision_payload": final_decision_payload,
         }

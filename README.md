@@ -80,7 +80,8 @@ conda 환경이 필요한 경우에는 기존 `environment.yml` 기반 runner를
 - Week 4: `student_parts/week04_retrieve_nanas_memory.py`
   - LLM이 ChromaDB 개인 참고자료와 SQLite structured data 검색 tool을 조합
   - 개인 참고자료 add/search는 `PersonalReferenceStore`의 ChromaDB collection과 OpenAI embedding adapter를 기준으로 동작합니다.
-  - `add_personal_reference`, `search_nana_memory` 결과에는 `reference_backend`가 포함되어 vector store, embedding provider/model, collection을 trace에서 확인할 수 있습니다.
+  - course repo 기준 RAG tool은 `search_personal_references`와 `search_saved_requests`이며, 각각 top-level `hits`, `rows` payload를 반환합니다.
+  - 기존 통합 검색 `search_nana_memory`는 compatibility helper로 남겨 두며 `reference_backend`와 context를 함께 확인할 수 있습니다.
   - `week04_tools()`는 Week 1-3 도구에 RAG 도구를 누적합니다.
 - Week 5: `student_parts/week05_load_kanas_past_conversations.py`, `mcp_server/sqlite_mcp_server.py`
   - LLM이 MCP SQLite 이전 대화 검색, 메시지 로드, 일정 추출 tool을 조합
@@ -88,7 +89,8 @@ conda 환경이 필요한 경우에는 기존 `environment.yml` 기반 runner를
 - Week 6: `student_parts/week06_kanamate_decides_schedule.py`
   - prompt-driven supervisor, `nana_agent`, `kana_agent`, tool 기반 sub-agent
   - Week 6 파일은 이전 주차 구현을 다시 작성하지 않고 Week 1-5 도구를 import해 sub-agent tool 목록을 조립합니다.
-  - `find_common_available_slots`에서 busy-time rows를 공통 가능 시간 후보로 바꾸고, `propose_group_schedule`이 최종 결정 payload를 만듭니다.
+  - `decide_final_slot`이 course repo 기준 최종 `final_slot`, `reason`, `candidates` payload를 반환합니다.
+  - 기존 `find_common_available_slots`와 `propose_group_schedule`은 compatibility helper로 남겨 기능을 유지합니다.
 
 강사용 기준본은 실행 가능한 구현을 담고 있습니다. 학생용 배포본은 `scripts/make_student_distribution.py`가 주차별 `@tool` 함수 구현부만 `NotImplementedError` TODO로 바꿉니다.
 

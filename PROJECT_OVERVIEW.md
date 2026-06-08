@@ -48,9 +48,9 @@
 | Week 1 | `student_parts/week01_wake_up_nana.py` | LangChain tool 기초 | `week01_tools()`가 개인 일정 생성, 조회, 삭제 tool을 공개합니다. |
 | Week 2 | `student_parts/week02_structure_natural_language_requests.py` | Structured output | `week02_tools()`가 Week 1 도구에 structured output tool을 누적합니다. |
 | Week 3 | `student_parts/week03_build_nanas_logbook.py` | SQLite persistence | `week03_tools()`가 Week 1-2 도구에 SQLite 저장/조회/삭제 tool을 누적합니다. |
-| Week 4 | `student_parts/week04_retrieve_nanas_memory.py` | Agentic RAG | `week04_tools()`가 Week 1-3 도구에 최소 RAG 검색 tool인 `search_nana_memory`를 누적합니다. |
+| Week 4 | `student_parts/week04_retrieve_nanas_memory.py` | Agentic RAG | `week04_tools()`가 Week 1-3 도구에 course repo 기준 RAG 검색 tool인 `search_personal_references`, `search_saved_requests`를 누적합니다. |
 | Week 5 | `student_parts/week05_load_kanas_past_conversations.py`, `mcp_server/sqlite_mcp_server.py` | MCP tool 연결 | `week05_tools()`가 Week 1-4 도구에 외부 대화/일정 추출 tool을 누적합니다. |
-| Week 6 | `student_parts/week06_kanamate_decides_schedule.py` | Supervisor / sub-agent | `nana_agent`, `kana_agent`가 이전 주차 tool 목록을 import하고, `find_common_available_slots`와 `propose_group_schedule`로 그룹 일정 결정을 완성합니다. |
+| Week 6 | `student_parts/week06_kanamate_decides_schedule.py` | Supervisor / sub-agent | `nana_agent`, `kana_agent`가 이전 주차 tool 목록을 import하고, `decide_final_slot`으로 course repo 기준 `final_slot` 결정을 완성합니다. |
 
 주차가 올라갈수록 앞 주차의 결과를 재사용합니다. Week 1은 단독 구현이고, Week 2는 Week 1 도구를 포함하며, Week 3은 Week 1-2 도구를 포함하는 식으로 누적됩니다. 최종 Week 6의 `kana_agent`는 Week 5의 외부 일정 검색 결과를 사용하고, `nana_agent`는 Week 1/3/4의 개인 일정 생성, 저장, 검색 흐름을 사용합니다.
 

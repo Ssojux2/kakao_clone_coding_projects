@@ -15,8 +15,9 @@ SQLITE_STORE = AppSQLiteStore(CONFIG.app_db_path)
 
 
 # [수강생 구현 가이드]
-# Week 4의 핵심 실습은 개인 참고자료 vector search와 SQLite 일정 검색을 하나의 RAG tool 결과로 합치는 것입니다.
-# add_personal_reference는 ChromaDB에 자료를 넣는 tool, search_nana_memory는 참고자료 hit와 일정 chunk/context를 반환하는 tool입니다.
+# Week 4의 핵심 실습은 개인 참고자료 vector search와 SQLite 저장 요청 검색을 구분하는 것입니다.
+# search_personal_references와 search_saved_requests는 course repo 노트북의 canonical tool contract입니다.
+# search_nana_memory는 기존 앱 흐름을 위한 legacy 통합 검색 tool로 남겨 둡니다.
 
 
 def _safe_limit(limit: int, default: int = 5, maximum: int = 50) -> int:
@@ -39,6 +40,22 @@ def _reference_backend_info() -> dict[str, Any]:
     return REFERENCE_STORE.backend_info()
 
 
+def _course_reference_hits(query: str, top_k: int) -> list[dict[str, Any]]:
+    hits = REFERENCE_STORE.search_personal_references(query=query, limit=_safe_limit(top_k, default=2, maximum=20))
+    return [
+        {
+            "id": hit.get("id"),
+            "content": hit.get("content"),
+            "distance": hit.get("distance"),
+            "metadata": {
+                "title": hit.get("title", ""),
+                "tags": hit.get("tags", ""),
+            },
+        }
+        for hit in hits
+    ]
+
+
 @tool
 def add_personal_reference(title: str, content: str, tags: list[str] | None = None) -> str:
     """개인 참고자료를 ChromaDB에 추가합니다."""
@@ -55,6 +72,28 @@ def add_personal_reference(title: str, content: str, tags: list[str] | None = No
         },
         ensure_ascii=False,
     )
+
+
+@tool
+def search_personal_references(query: str, top_k: int = 2) -> str:
+    """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
+
+    # [수강생 구현 포인트]
+    # course repo 노트북과 맞춰 top-level hits payload를 반환합니다.
+    return json.dumps({"hits": _course_reference_hits(query=query, top_k=top_k)}, ensure_ascii=False)
+
+
+@tool
+def search_saved_requests(query: str, top_k: int = 3) -> str:
+    """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다."""
+
+    # [수강생 구현 포인트]
+    # course repo 노트북과 맞춰 top-level rows payload를 반환합니다.
+    limit = _safe_limit(top_k, default=3, maximum=50)
+    rows = SQLITE_STORE.search_saved_requests(query=query, limit=limit)
+    if not rows:
+        rows = SQLITE_STORE.list_saved_requests(limit=limit)
+    return json.dumps({"rows": rows}, ensure_ascii=False)
 
 
 @tool
@@ -188,9 +227,10 @@ def week04_tools() -> list[Any]:
     """3주차까지의 도구에 4주차 RAG 도구를 누적한 목록입니다."""
 
     # [수강생 참고 코드 포인트]
-    # Week 3까지의 저장/조회 tool에 RAG 입력/검색 tool을 추가합니다.
+    # Week 3까지의 저장/조회 tool에 course repo 기준 RAG 입력/검색 tool을 추가합니다.
     return [
         *week03_tools(),
         add_personal_reference,
-        search_nana_memory,
+        search_personal_references,
+        search_saved_requests,
     ]

@@ -43,19 +43,19 @@
 
 ## Week 4 · week04_retrieve_nanas_memory.py
 
-### 미션: 최소 tool로 개인 참고자료와 SQLite 일정 chunk 검색
+### 미션: 개인 참고자료 검색과 SQLite 저장 요청 검색 tool 구분
 
-학습 목표는 RAG를 "검색한 근거를 답변 재료로 붙이는 구조"로 이해하는 것입니다. Week 4의 대표 흐름은 Agent가 핵심 검색 조건을 고르고, `search_nana_memory` 한 번으로 Chroma 개인 참고자료와 SQLite `schedules` 일정 chunk를 함께 받아 답변 근거로 쓰는 방식입니다.
+학습 목표는 RAG를 "검색한 근거를 답변 재료로 붙이는 구조"로 이해하는 것입니다. Week 4의 대표 흐름은 Agent가 질문 성격에 따라 `search_personal_references`와 `search_saved_requests` 중 필요한 tool을 고르고, ChromaDB 참고자료 hit 또는 SQLite 저장 요청 row를 답변 근거로 쓰는 방식입니다.
 
-`search_nana_memory`는 `query`, `date_from`, `date_to`, `attendee`, `limit` 조건으로 참고자료와 저장 일정을 검색합니다. 개인 참고자료 검색은 ChromaDB collection에 저장된 문서를 OpenAI embedding으로 query하고, 저장 일정은 tool 안에서 "일정 1건 = chunk 1개"로 변환되어 `schedule_chunks`에 담깁니다.
+`search_personal_references`는 `query`, `top_k` 조건으로 ChromaDB collection에 저장된 개인 참고자료를 OpenAI embedding 기반으로 검색하고 top-level `hits`를 반환합니다. `search_saved_requests`는 `query`, `top_k` 조건으로 Week 3 SQLite `structured_requests` row를 검색하고 top-level `rows`를 반환합니다.
 
-`add_personal_reference`는 개인 참고자료를 추가할 때만 사용합니다. 일반 검색/답변 흐름에서는 `search_nana_memory` 결과의 `reference_hits`, `schedule_chunks`, `context`를 Agent가 직접 읽고 답합니다.
+`add_personal_reference`는 개인 참고자료를 추가할 때만 사용합니다. 기존 통합 검색 `search_nana_memory`는 앱 compatibility helper로 남겨 두지만, course repo 기준 agent prompt와 golden harness는 `search_personal_references`, `search_saved_requests`를 우선합니다.
 
-구현 순서는 단순하게 유지합니다. 먼저 ChromaDB 개인 참고자료를 OpenAI embedding 기반으로 검색하고, 그 다음 SQLite `schedules` 테이블을 검색한 뒤, 각 일정 row를 하나의 chunk dict로 바꾸고, 마지막에 모델 답변에 붙일 `context` 문자열을 조립합니다. `fixed/stores.py`는 테이블 구조와 저장소 API를 이해하기 위한 참고 파일이며, Week 4 실습 구현은 `student_parts/week04_retrieve_nanas_memory.py` 안에서 진행합니다.
+구현 순서는 단순하게 유지합니다. 먼저 ChromaDB 개인 참고자료 검색 결과를 `hits` 배열로 바꾸고, 그 다음 SQLite 저장 요청 검색 결과를 `rows` 배열로 바꿉니다. `fixed/stores.py`는 테이블 구조와 저장소 API를 이해하기 위한 참고 파일이며, Week 4 실습 구현은 `student_parts/week04_retrieve_nanas_memory.py` 안에서 진행합니다.
 
-실습 전 `.env`에 `OPENAI_API_KEY`가 필요합니다. 개인 참고자료 검색은 OpenAI embedding을 사용하며, 모델명은 `OPENAI_EMBEDDING_MODEL` 값으로 정합니다. `add_personal_reference`와 `search_nana_memory`의 `reference_backend` 필드에서 `vector_store=chromadb`, `embedding_provider=openai`를 확인합니다.
+실습 전 `.env`에 `OPENAI_API_KEY`가 필요합니다. 개인 참고자료 검색은 OpenAI embedding을 사용하며, 모델명은 `OPENAI_EMBEDDING_MODEL` 값으로 정합니다. compatibility helper인 `search_nana_memory`의 `reference_backend` 필드에서 `vector_store=chromadb`, `embedding_provider=openai`를 확인할 수 있습니다.
 
-검증 포인트는 `search_nana_memory`가 참고자료와 일정 chunk를 함께 반환하는지, chunk가 `schedule_id`를 보존하는지, `context` 문자열이 모델 답변에 붙이기 좋은 형태인지 확인하는 것입니다.
+검증 포인트는 `search_personal_references`가 `hits`를, `search_saved_requests`가 `rows`를 top-level payload로 반환하는지, trace에서 두 tool 중 어떤 tool이 왜 호출됐는지 확인하는 것입니다.
 
 ## Week 5 · week05_load_kanas_past_conversations.py
 
@@ -75,11 +75,11 @@
 
 학습 목표는 multi-agent routing을 역할 분리로 이해하는 것입니다. `nana_agent`는 개인 일정, 저장, 개인 RAG 흐름을 담당하고, `kana_agent`는 여러 사람의 일정 조율을 담당합니다.
 
-`nana_system_prompt`, `kana_system_prompt`, `supervisor_system_prompt`는 각 agent가 어떤 tool chain을 고르는지 안내합니다. `nana_tools`는 Week 4까지의 개인 도구를 공개하고, `kana_tools`는 `extract_schedule_request`, 외부 대화 검색, 멤버 일정 수집, `find_common_available_slots`, `propose_group_schedule`을 공개합니다. `supervisor_tools`는 `nana_agent`, `kana_agent` 위임 도구만 노출합니다.
+`nana_system_prompt`, `kana_system_prompt`, `supervisor_system_prompt`는 각 agent가 어떤 tool chain을 고르는지 안내합니다. `nana_tools`는 Week 4까지의 개인 도구를 공개하고, `kana_tools`는 `extract_schedule_request`, 외부 대화 검색, 멤버 일정 수집, `decide_final_slot`을 공개합니다. `supervisor_tools`는 `nana_agent`, `kana_agent` 위임 도구만 노출합니다.
 
-`kana_agent`는 `collect_member_schedules`로 busy-time 목록을 모으고, `find_common_available_slots`로 공통 가능 시간 후보를 계산합니다. 그 다음 선택한 시간을 `selected_slot`으로 만들어 `propose_group_schedule`에 전달합니다. `propose_group_schedule`은 `title`, `member_names`, `selected_slot`, `reason`을 최종 `final_decision` payload로 포장하고, 선택된 시간이 있으면 `status`를 `confirmed`로 둡니다.
+`kana_agent`는 외부 대화와 멤버 일정을 확인한 뒤 `decide_final_slot`을 호출합니다. `decide_final_slot`은 기존 공통 시간 계산 helper를 재사용해 후보가 비어 있으면 직접 후보를 계산하고, 최종 `final_slot`, `reason`, `candidates` payload를 반환합니다.
 
-검증 포인트는 supervisor trace에서 어떤 agent가 선택됐는지, 하위 agent trace에 `collect_member_schedules`, `find_common_available_slots`, `propose_group_schedule`이 어떤 순서로 호출됐는지, 최종 payload의 `status`, `selected_slot`, `reason`이 도구 결과와 일치하는지 확인하는 것입니다.
+검증 포인트는 supervisor trace에서 어떤 agent가 선택됐는지, 하위 agent trace에 `search_previous_conversations`, `extract_schedules_from_history`, `decide_final_slot`이 어떤 순서로 호출됐는지, 최종 payload의 `final_slot`, `reason`, `candidates`가 도구 결과와 일치하는지 확인하는 것입니다.
 
 ## 주차별 미션 진행 템플릿
 

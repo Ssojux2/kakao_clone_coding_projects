@@ -7,18 +7,18 @@ from fixed.agent_runtime import AgentRuntime
 from fixed.stores import AppSQLiteStore
 from student_parts.week06_kanamate_decides_schedule import (
     agent_tool_names,
+    decide_final_slot,
     find_common_available_slots_dict,
-    propose_group_schedule,
 )
 
 
 def test_week06_kana_tools_include_slot_decision_chain() -> None:
     kana_tools = set(agent_tool_names("kana_agent"))
 
-    assert {"collect_member_schedules", "find_common_available_slots", "propose_group_schedule"} <= kana_tools
+    assert {"search_previous_conversations", "extract_schedules_from_history", "decide_final_slot"} <= kana_tools
 
 
-def test_week06_common_slots_feed_final_decision() -> None:
+def test_week06_common_slots_feed_final_slot() -> None:
     target_day = runtime_clock.next_weekday_iso(1)
     slots = find_common_available_slots_dict(
         member_names=["철수", "영희"],
@@ -29,19 +29,17 @@ def test_week06_common_slots_feed_final_decision() -> None:
     )["candidate_slots"]
 
     result = json.loads(
-        propose_group_schedule.invoke(
+        decide_final_slot.invoke(
             {
-                "title": "팀 회의",
-                "member_names": ["철수", "영희"],
                 "candidate_slots": slots,
-                "selected_slot": slots[0],
                 "reason": "첫 번째 공통 가능 시간",
             }
         )
     )
 
-    assert result["final_decision"]["status"] == "confirmed"
-    assert result["final_decision"]["selected_slot"] == slots[0]
+    assert result["final_slot"] == f"{slots[0]['date']} {slots[0]['start_time']}-{slots[0]['end_time']}"
+    assert result["reason"] == "첫 번째 공통 가능 시간"
+    assert result["candidates"][0] == result["final_slot"]
 
 
 def test_week06_common_slots_accept_iso_datetime_date_bounds() -> None:
