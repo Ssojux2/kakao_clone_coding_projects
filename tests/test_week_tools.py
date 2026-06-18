@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import fixed.runtime_clock as runtime_clock
+import student_parts.week03_build_nanas_logbook as week03_module
 from fixed.stores import AppSQLiteStore
 from golden_cases import GOLDEN_CASES, find_case_by_input, harness_prompt_examples, sample_prompts
 from student_parts.week01_wake_up_nana import PERSONAL_SCHEDULES, personal_create_schedule, week01_tools
@@ -168,6 +170,116 @@ def test_delete_saved_schedules_by_filter_removes_matching_rows(tmp_path) -> Non
     assert result["deleted_count"] == 1
     assert len(remaining) == 1
     assert remaining[0]["title"] == "개인 코칭"
+
+
+def test_personal_delete_saved_schedules_tool_deletes_by_schedule_id(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "app.sqlite3"
+    monkeypatch.setattr(week03_module, "CONFIG", replace(week03_module.CONFIG, app_db_path=db_path))
+    store = AppSQLiteStore(db_path)
+    saved = store.save_structured_request(
+        {
+            "kind": "group_schedule",
+            "title": "도입 회의",
+            "date": "2026-05-16",
+            "start_time": "10:00",
+            "end_time": "11:00",
+            "members": ["민준", "서연"],
+            "reason": "삭제 tool 테스트",
+            "original_text": "5월 16일 도입 회의 잡아줘",
+        }
+    )
+    schedule_id = next(row["id"] for row in saved["saved_rows"] if row["table"] == "schedules")
+
+    result = json.loads(week03_module.personal_delete_saved_schedules.invoke({"schedule_ids": [schedule_id]}))
+
+    assert result["ok"] is True
+    assert result["deleted_count"] == 1
+    assert result["filters"]["schedule_ids"] == [schedule_id]
+    assert result["deleted"][0]["source"] == "app_db"
+    assert store.list_schedules(limit=20) == []
+
+
+def test_delete_saved_schedules_delete_all_removes_rows(tmp_path) -> None:
+    store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    for title in ["팀 회의", "제품 리뷰"]:
+        store.save_structured_request(
+            {
+                "kind": "group_schedule",
+                "title": title,
+                "date": "2026-05-17",
+                "start_time": "15:00",
+                "end_time": "16:00",
+                "members": ["민준", "서연"],
+                "reason": "전체 삭제 테스트",
+                "original_text": title,
+            }
+        )
+
+    result = delete_saved_schedules_dict(delete_all=True, app_store=store)
+
+    assert result["ok"] is True
+    assert result["delete_all"] is True
+    assert result["deleted_count"] == 2
+    assert store.list_schedules(limit=20) == []
+
+
+def test_delete_schedule_by_query_uses_structured_fields_without_regex(tmp_path, monkeypatch) -> None:
+    class FakeStructuredRequest:
+        def model_dump(self) -> dict[str, object]:
+            return {
+                "kind": "group_schedule",
+                "title": "팀 회의",
+                "date": "2026-05-18",
+                "start_time": "15:00",
+                "end_time": "16:00",
+                "members": ["민준", "서연"],
+                "priority": None,
+                "reason": "테스트 구조화 결과",
+                "original_text": "팀 회의 삭제해줘",
+            }
+
+    store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    store.save_structured_request(
+        {
+            "kind": "group_schedule",
+            "title": "팀 회의",
+            "date": "2026-05-18",
+            "start_time": "15:00",
+            "end_time": "16:00",
+            "members": ["민준", "서연"],
+            "reason": "삭제 대상",
+            "original_text": "5월 18일 팀 회의 잡아줘",
+        }
+    )
+    store.save_structured_request(
+        {
+            "kind": "group_schedule",
+            "title": "팀 회의",
+            "date": "2026-05-19",
+            "start_time": "15:00",
+            "end_time": "16:00",
+            "members": ["민준", "서연"],
+            "reason": "남아야 하는 일정",
+            "original_text": "5월 19일 팀 회의 잡아줘",
+        }
+    )
+    monkeypatch.setattr(week03_module, "extract_structured_request", lambda query: FakeStructuredRequest())
+
+    result = week03_module.delete_schedule_by_query_dict("팀 회의 삭제해줘", app_store=store)
+    remaining = store.list_schedules(limit=20)
+
+    assert result["tool_name"] == "personal_delete_schedule_by_query"
+    assert result["structured_request"]["title"] == "팀 회의"
+    assert result["deleted_count"] == 1
+    assert result["filters"] == {
+        "schedule_ids": None,
+        "date": "2026-05-18",
+        "title": "팀 회의",
+        "start_time": "15:00",
+        "time_unspecified": False,
+    }
+    assert len(remaining) == 1
+    assert remaining[0]["date"] == "2026-05-19"
 
 
 def test_week6_common_slot_calculation_uses_busy_rows() -> None:

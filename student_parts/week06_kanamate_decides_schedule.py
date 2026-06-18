@@ -6,13 +6,15 @@ from typing import Any
 
 from langchain.agents import create_agent
 from langchain.tools import tool
-from langchain_openai import ChatOpenAI
 
 from fixed.config import CONFIG
+from fixed.llm import chat_model
 from fixed.runtime_clock import current_app_date_iso
 from golden_cases import harness_prompt_examples
 from student_parts.week01_wake_up_nana import (
     ensure_demo_personal_schedule,
+    extract_agent_events,
+    extract_final_text,
     list_personal_schedule_dicts,
     personal_create_schedule,
     personal_delete_schedule,
@@ -40,11 +42,47 @@ from student_parts.week05_load_kanas_past_conversations import (
 
 _NANA_SUBAGENT: Any | None = None
 _KANA_SUBAGENT: Any | None = None
+_SUPERVISOR_AGENT: Any | None = None
 
 
 # [수강생 구현 가이드]
-# Week 6의 학생 구현 대상은 @tool이 붙은 sub-agent 위임/그룹 조율 tool입니다.
-# prompt 함수, tool-list 함수, busy-time 계산 helper는 참고 코드로 남겨 두고 tool payload 계약에 집중하세요.
+#
+# 목표
+#   Week 6은 "모든 기능을 한 agent가 직접 처리"하지 않고 supervisor가 Nana/Kana 하위 agent로 위임하게 만듭니다.
+#   Nana는 개인 일정/저장/RAG를 맡고, Kana는 외부 대화/멤버 일정/그룹 시간 결정을 맡습니다.
+#
+# 구현 대상
+#   1. decide_final_slot
+#      - candidate_slots가 이미 들어오면 첫 번째 후보를 최종 시간으로 선택합니다.
+#      - candidate_slots가 비어 있고 member_names/date_from/date_to가 있으면
+#        find_common_available_slots_dict로 후보를 먼저 계산합니다.
+#      - 반환 JSON은 course repo 기준 top-level final_slot, reason, candidates를 반드시 포함합니다.
+#      - 후보 계산을 수행한 경우 members, busy_rows, candidate_slots도 함께 남겨 근거를 확인할 수 있게 합니다.
+#
+#   2. nana_agent
+#      - supervisor가 넘긴 query를 build_nana_subagent().invoke(...)로 실행합니다.
+#      - 하위 agent 결과에서 answer, trace, inner_tool_names를 뽑아 JSON 문자열로 반환합니다.
+#      - PROXY_TOKEN이 없으면 예외 대신 ok=False 실패 payload를 반환해 실습 화면이 깨지지 않게 합니다.
+#
+#   3. kana_agent
+#      - supervisor가 넘긴 query를 build_kana_subagent().invoke(...)로 실행합니다.
+#      - 하위 trace를 훑어 decide_final_slot 결과를 final_slot_payload로 끌어올립니다.
+#      - answer, trace, inner_tool_names, final_slot_payload, final_decision_payload를 JSON으로 반환합니다.
+#
+# 중요한 구조
+#   Week 6 파일은 Week 1-5 구현을 다시 작성하지 않습니다.
+#   이전 주차 tool을 import하고 nana_tools(), kana_tools(), supervisor_tools()에서 역할별로 조립합니다.
+#   prompt 함수와 busy-time 계산 helper는 구현 대상이 아니라 agent 역할과 데이터 흐름을 이해하는 참고 코드입니다.
+#
+# Compatibility helper
+#   personal_delete_schedule_by_query, find_common_available_slots, propose_group_schedule은 기존 흐름을 위해 유지합니다.
+#   학생 핵심 구현 대상은 decide_final_slot, nana_agent, kana_agent 3개입니다.
+#
+# 검증 방법
+#   ./run.sh --week6 또는 ./run.sh --golden을 실행합니다.
+#   supervisor trace에서 nana_agent 또는 kana_agent 중 무엇이 선택됐는지 확인합니다.
+#   그룹 일정 요청에서는 하위 trace에 search_previous_conversations, extract_schedules_from_history,
+#   decide_final_slot이 이어지고 final_slot_payload가 최종 답변과 일치하는지 확인합니다.
 
 
 def delete_schedule_by_query_dict(query: str, app_store: Any | None = None) -> dict[str, Any]:
@@ -62,15 +100,13 @@ def delete_schedule_by_query_dict(query: str, app_store: Any | None = None) -> d
 def personal_delete_schedule_by_query(query: str) -> str:
     """일정 ID가 없어도 사용자 프롬프트의 날짜, 시간, 제목 단서로 개인 일정을 찾아 삭제합니다."""
 
-    # [수강생 구현 포인트]
-    # Week 3 삭제 helper를 그대로 JSON tool로 감싸 Week 6 import 호환을 유지합니다.
     return json.dumps(delete_schedule_by_query_dict(query), ensure_ascii=False)
 
 
-def _chat_model() -> ChatOpenAI:
+def _chat_model() -> object:
     if not CONFIG.has_openai_key:
-        raise RuntimeError("OPENAI_API_KEY가 .env에 필요합니다.")
-    return ChatOpenAI(model=CONFIG.openai_model, temperature=0)
+        raise RuntimeError("PROXY_TOKEN이 .env에 필요합니다.")
+    return chat_model()
 
 
 def _harness_examples_text() -> str:
@@ -78,8 +114,6 @@ def _harness_examples_text() -> str:
 
 
 def _nana_capability_text() -> str:
-    # [수강생 참고 코드 포인트]
-    # prompt에는 tool 이름과 사용 조건을 구체적으로 써야 LLM이 올바른 tool chain을 선택합니다.
     parts = [
         "Week 1 개인 일정 생성/조회/삭제는 personal_create_schedule, personal_list_schedules, "
         "personal_delete_schedule을 사용한다.",
@@ -98,8 +132,6 @@ def _nana_capability_text() -> str:
 
 
 def _nana_workflow_text() -> str:
-    # [수강생 참고 코드 포인트]
-    # 완성본에서는 개인 일정 생성 workflow가 "구조화 -> 생성 -> 저장"까지 항상 열립니다.
     return (
         "개인 일정 생성 요청이면 extract_schedule_request 결과를 바탕으로 personal_create_schedule을 호출하고, "
         "personal_create_schedule 결과의 structured_request를 save_structured_request payload로 전달해 앱 DB에 저장한다. "
@@ -108,8 +140,6 @@ def _nana_workflow_text() -> str:
 
 
 def _kana_capability_text() -> str:
-    # [수강생 참고 코드 포인트]
-    # Kana는 여러 사람 일정만 담당하며, 완성본에서는 그룹 일정 결정 도구까지 항상 열립니다.
     parts = [
         "먼저 extract_schedule_request로 날짜와 멤버를 구조화한다.",
         "이전 대화 원문이 필요하면 search_previous_conversations나 load_conversation_messages를 쓴다.",
@@ -129,9 +159,6 @@ def _kana_capability_text() -> str:
 
 
 def nana_system_prompt() -> str:
-    # [수강생 참고 코드 포인트]
-    # Nana 하위 agent prompt에는 개인 일정/RAG만 맡긴다는 역할 경계와 사용할 tool chain을 적습니다.
-    # 도구 결과에 없는 사실을 만들지 말라는 제약도 함께 넣어야 trace 기반 검증이 안정적입니다.
     return (
         "너는 Kanana의 Nana 하위 에이전트다. 사용자의 프롬프트를 기준으로 필요한 도구를 직접 선택한다. "
         f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
@@ -148,8 +175,6 @@ def nana_system_prompt() -> str:
 
 
 def kana_system_prompt() -> str:
-    # [수강생 참고 코드 포인트]
-    # Kana 하위 agent prompt에는 멤버 일정 수집 -> 공통 가능 시간 계산 -> 최종 제안 순서를 안내합니다.
     return (
         "너는 Kanana의 Kana 하위 에이전트다. 여러 사람의 일정을 조율한다. "
         f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
@@ -161,9 +186,6 @@ def kana_system_prompt() -> str:
 
 
 def supervisor_system_prompt() -> str:
-    # [수강생 참고 코드 포인트]
-    # supervisor는 실제 일정 처리를 직접 하지 않고 nana_agent/kana_agent 중 하나로 위임합니다.
-    # 사용자 문장 기준으로 개인 일정은 Nana, 여러 사람/그룹 조율은 Kana로 보내는 기준을 적습니다.
     return (
         "너는 Kanana 일정 비서의 프롬프트 기반 supervisor 에이전트다. 메인 런타임이나 Python 코드가 "
         f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
@@ -186,64 +208,39 @@ def supervisor_system_prompt() -> str:
     )
 
 
-def _message_content_to_text(message: Any) -> str:
-    content = getattr(message, "content", message)
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                parts.append(str(item.get("text") or item.get("content") or ""))
-            else:
-                parts.append(str(item))
-        return "\n".join(part for part in parts if part).strip()
-    return str(content).strip()
-
-
-def _extract_final_text(result: dict[str, Any]) -> str:
-    messages = result.get("messages", []) if isinstance(result, dict) else []
-    for message in reversed(messages):
-        text = _message_content_to_text(message)
-        if text:
-            return text
-    return "응답을 생성하지 못했습니다."
-
-
-def _extract_agent_trace(result: dict[str, Any]) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
-    messages = result.get("messages", []) if isinstance(result, dict) else []
-    for message in messages:
-        tool_calls = getattr(message, "tool_calls", None) or []
-        for call in tool_calls:
-            events.append(
-                {
-                    "event": "tool_call",
-                    "tool_name": call.get("name"),
-                    "arguments": call.get("args"),
-                    "id": call.get("id"),
-                }
-            )
-        if getattr(message, "type", "") == "tool":
-            content = getattr(message, "content", "")
-            parsed: Any = content
-            try:
-                parsed = json.loads(content)
-            except Exception:
-                pass
-            events.append(
-                {
-                    "event": "tool_result",
-                    "tool_name": getattr(message, "name", None),
-                    "content": parsed,
-                    "id": getattr(message, "tool_call_id", None),
-                }
-            )
-    return events
-
-
 def _tool_call_names(events: list[dict[str, Any]]) -> list[str]:
     return [event["tool_name"] for event in events if event.get("event") == "tool_call" and event.get("tool_name")]
+
+
+def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
+    """Week 6 supervisor 실행 결과를 UI trace payload로 변환합니다."""
+
+    events = extract_agent_events(result)
+    inner_tool_names: list[str] = []
+    final_slot_payload: dict[str, Any] | None = None
+    final_decision_payload: dict[str, Any] | None = None
+    selected_agent: str | None = None
+
+    for event in events:
+        if event.get("event") == "tool_call" and event.get("tool_name") in {"nana_agent", "kana_agent"}:
+            selected_agent = event["tool_name"]
+        content = event.get("content")
+        if isinstance(content, dict):
+            inner_tool_names.extend(content.get("inner_tool_names") or [])
+            if content.get("final_slot_payload"):
+                final_slot_payload = content["final_slot_payload"]
+            elif "final_slot" in content:
+                final_slot_payload = content
+            if content.get("final_decision_payload"):
+                final_decision_payload = content["final_decision_payload"]
+
+    return {
+        "events": events,
+        "supervisor_selected_agent": selected_agent,
+        "inner_tool_names": inner_tool_names,
+        "final_slot_payload": final_slot_payload,
+        "final_decision_payload": final_decision_payload,
+    }
 
 
 def tool_name(tool_object: Any) -> str:
@@ -254,8 +251,6 @@ def tool_name(tool_object: Any) -> str:
 def extract_schedule_request(query: str) -> str:
     """사용자 프롬프트를 일정 앱용 구조화 요청 JSON으로 변환합니다."""
 
-    # [수강생 구현 포인트]
-    # Kana도 날짜/멤버 구조화가 필요하므로 Week 2 structured output 흐름을 같은 JSON 계약으로 노출합니다.
     structured = extract_structured_request(query)
     return json.dumps(
         {
@@ -322,11 +317,6 @@ def find_common_available_slots_dict(
 ) -> dict[str, Any]:
     """멤버별 busy-time rows를 공통 가능 시간 후보로 바꿉니다."""
 
-    # [수강생 참고 코드 포인트]
-    # 1. collect_member_schedules로 나와 멤버들의 busy-time rows를 모읍니다.
-    # 2. 날짜 범위를 하루씩 순회하고, 업무시간을 30분 단위 window로 훑습니다.
-    # 3. 모든 busy row와 겹치지 않는 window만 candidate_slots에 넣습니다.
-    # 4. payload에는 members, busy_rows, candidate_slots를 모두 남겨 agent가 근거를 설명할 수 있게 합니다.
     normalized_members = _normalize_members(member_names)
     normalized_date_from = _normalize_date_bound(date_from)
     normalized_date_to = _normalize_date_bound(date_to)
@@ -392,8 +382,6 @@ def find_common_available_slots(
 ) -> str:
     """수집된 멤버 일정에서 공통으로 비어 있는 후보 시간을 계산합니다."""
 
-    # [수강생 구현 포인트]
-    # @tool wrapper는 dict helper 결과를 JSON 문자열로 감쌉니다.
     return json.dumps(
         find_common_available_slots_dict(
             member_names=member_names,
@@ -477,8 +465,6 @@ def decide_final_slot(
 ) -> str:
     """내 일정과 팀원 가능 시간을 비교해 최종 회의 시간을 결정합니다."""
 
-    # [수강생 구현 포인트]
-    # course repo 노트북과 맞춰 top-level final_slot/reason/candidates payload를 반환합니다.
     return json.dumps(
         decide_final_slot_dict(
             candidate_slots=candidate_slots,
@@ -493,14 +479,10 @@ def decide_final_slot(
 
 
 def nana_tools() -> list[Any]:
-    # [수강생 참고 코드 포인트]
-    # Nana는 개인 일정/RAG tool만 담당하고 그룹 조율 tool은 받지 않습니다.
     return week04_tools()
 
 
 def kana_tools() -> list[Any]:
-    # [수강생 참고 코드 포인트]
-    # Kana는 외부 대화/일정 수집부터 course repo 기준 최종 시간 결정까지 맡깁니다.
     return [
         extract_schedule_request,
         search_previous_conversations,
@@ -512,9 +494,6 @@ def kana_tools() -> list[Any]:
 
 
 def supervisor_tools() -> list[Any]:
-    # [수강생 참고 코드 포인트]
-    # supervisor에게는 하위 agent 위임 tool만 노출합니다.
-    # 이렇게 해야 supervisor가 세부 CRUD/RAG/MCP tool을 직접 호출하지 않습니다.
     return [nana_agent, kana_agent]
 
 
@@ -531,8 +510,6 @@ def agent_tool_names(agent_name: str) -> list[str]:
 def build_nana_subagent() -> object:
     """개인 일정과 RAG 작업을 처리하는 프롬프트 기반 Nana 하위 에이전트를 만듭니다."""
 
-    # [수강생 참고 코드 포인트]
-    # create_agent에 Nana prompt와 nana_tools()를 넘깁니다. 같은 agent를 재사용하도록 전역 캐시에 저장합니다.
     global _NANA_SUBAGENT
     if _NANA_SUBAGENT is None:
         _NANA_SUBAGENT = create_agent(
@@ -546,8 +523,6 @@ def build_nana_subagent() -> object:
 def build_kana_subagent() -> object:
     """그룹 일정 조율을 처리하는 프롬프트 기반 Kana 하위 에이전트를 만듭니다."""
 
-    # [수강생 참고 코드 포인트]
-    # create_agent에 Kana prompt와 kana_tools()를 넘깁니다.
     global _KANA_SUBAGENT
     if _KANA_SUBAGENT is None:
         _KANA_SUBAGENT = create_agent(
@@ -568,9 +543,6 @@ def propose_group_schedule(
 ) -> str:
     """Kana가 고른 후보 시간으로 최종 그룹 일정 결정 페이로드를 만듭니다."""
 
-    # [수강생 구현 포인트]
-    # selected_slot이 없으면 첫 번째 candidate를 선택하고, 후보가 없으면 needs_manual_review로 둡니다.
-    # final_decision에는 title/members/selected_slot/status/reason을 모두 담습니다.
     slots = candidate_slots or []
     selected = selected_slot or (slots[0] if slots else None)
     payload = {
@@ -587,16 +559,13 @@ def propose_group_schedule(
 def nana_agent(query: str) -> str:
     """개인 일정과 개인 RAG 작업을 프롬프트 기반 Nana 하위 에이전트에게 위임합니다."""
 
-    # [수강생 구현 포인트]
-    # supervisor가 호출하는 위임 tool입니다.
-    # 하위 agent 실행 결과에서 최종 답변과 tool trace를 추출해 JSON으로 반환합니다.
     if not CONFIG.has_openai_key:
         return json.dumps(
             {
                 "ok": False,
                 "selected_agent": "nana_agent",
-                "error": "missing_openai_api_key",
-                "answer": "Nana 하위 에이전트는 프롬프트 기반 도구 호출로 동작하므로 OPENAI_API_KEY가 필요합니다.",
+                "error": "missing_proxy_token",
+                "answer": "Nana 하위 에이전트는 프롬프트 기반 도구 호출로 동작하므로 PROXY_TOKEN이 필요합니다.",
                 "trace": [],
                 "inner_tool_names": [],
                 "mode": "prompt_driven_subagent",
@@ -604,12 +573,12 @@ def nana_agent(query: str) -> str:
             ensure_ascii=False,
         )
     result = build_nana_subagent().invoke({"messages": [{"role": "user", "content": query}]})
-    trace = _extract_agent_trace(result)
+    trace = extract_agent_events(result)
     return json.dumps(
         {
             "ok": True,
             "selected_agent": "nana_agent",
-            "answer": _extract_final_text(result),
+            "answer": extract_final_text(result),
             "trace": trace,
             "inner_tool_names": _tool_call_names(trace),
             "mode": "prompt_driven_subagent",
@@ -622,15 +591,13 @@ def nana_agent(query: str) -> str:
 def kana_agent(query: str) -> str:
     """그룹 일정 종합 작업을 프롬프트 기반 Kana 하위 에이전트에게 위임합니다."""
 
-    # [수강생 구현 포인트]
-    # Kana trace 안에서 decide_final_slot 결과를 찾아 final_slot_payload로 끌어올립니다.
     if not CONFIG.has_openai_key:
         return json.dumps(
             {
                 "ok": False,
                 "selected_agent": "kana_agent",
-                "error": "missing_openai_api_key",
-                "answer": "Kana 하위 에이전트는 프롬프트 기반 도구 호출로 동작하므로 OPENAI_API_KEY가 필요합니다.",
+                "error": "missing_proxy_token",
+                "answer": "Kana 하위 에이전트는 프롬프트 기반 도구 호출로 동작하므로 PROXY_TOKEN이 필요합니다.",
                 "trace": [],
                 "inner_tool_names": [],
                 "final_slot_payload": None,
@@ -640,7 +607,7 @@ def kana_agent(query: str) -> str:
             ensure_ascii=False,
         )
     result = build_kana_subagent().invoke({"messages": [{"role": "user", "content": query}]})
-    trace = _extract_agent_trace(result)
+    trace = extract_agent_events(result)
     final_slot = None
     final_decision = None
     for event in trace:
@@ -653,7 +620,7 @@ def kana_agent(query: str) -> str:
         {
             "ok": True,
             "selected_agent": "kana_agent",
-            "answer": _extract_final_text(result),
+            "answer": extract_final_text(result),
             "trace": trace,
             "inner_tool_names": _tool_call_names(trace),
             "final_slot_payload": final_slot,
@@ -667,13 +634,31 @@ def kana_agent(query: str) -> str:
 def build_langchain_supervisor_agent() -> object:
     """nana_agent와 kana_agent 위임 도구만 노출하는 LangChain v1 슈퍼바이저입니다."""
 
-    # [수강생 참고 코드 포인트]
-    # supervisor agent에는 supervisor_tools()만 넘깁니다.
-    # 세부 기능은 하위 agent가 자기 tool 목록 안에서 직접 선택합니다.
     if not CONFIG.has_openai_key:
-        raise RuntimeError("OPENAI_API_KEY가 .env에 필요합니다.")
-    return create_agent(
-        model=_chat_model(),
-        tools=supervisor_tools(),
-        system_prompt=supervisor_system_prompt(),
-    )
+        raise RuntimeError("PROXY_TOKEN이 .env에 필요합니다.")
+    global _SUPERVISOR_AGENT
+    if _SUPERVISOR_AGENT is None:
+        _SUPERVISOR_AGENT = create_agent(
+            model=_chat_model(),
+            tools=supervisor_tools(),
+            system_prompt=supervisor_system_prompt(),
+        )
+    return _SUPERVISOR_AGENT
+
+
+def week06_system_prompt() -> str:
+    """6주차 active-week agent가 따르는 supervisor 시스템 프롬프트입니다."""
+
+    return supervisor_system_prompt()
+
+
+def build_week06_agent() -> object:
+    """Week 6 supervisor agent를 만듭니다."""
+
+    return build_langchain_supervisor_agent()
+
+
+def build_week_agent() -> object:
+    """active-week registry가 호출하는 표준 Week agent builder입니다."""
+
+    return build_week06_agent()

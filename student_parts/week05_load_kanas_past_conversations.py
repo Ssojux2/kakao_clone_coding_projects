@@ -8,9 +8,12 @@ from pathlib import Path
 from threading import Thread
 from typing import Any
 
+from langchain.agents import create_agent
 from langchain.tools import tool
 
 from fixed.config import CONFIG, PACKAGE_ROOT
+from fixed.llm import chat_model
+from fixed.runtime_clock import current_app_date_iso
 from fixed.stores import (
     ExternalPeopleSQLiteStore,
     external_schedule_summary,
@@ -22,12 +25,50 @@ from student_parts.week04_retrieve_nanas_memory import week04_tools
 
 
 EXTERNAL_STORE = ExternalPeopleSQLiteStore(CONFIG.external_db_path)
+_WEEK05_AGENT: Any | None = None
 
 
 # [수강생 구현 가이드]
-# Week 5의 핵심 실습은 외부 SQLite/MCP 서버를 LangChain tool처럼 불러와 감싸는 것입니다.
-# 아래 @tool 함수들은 직접 SQL을 작성하기보다 call_mcp_tool_sync로 MCP tool을 호출하고, 그 결과를 agent가 읽을 JSON으로 전달합니다.
-# collect_member_schedules는 Week 6 공통 시간 계산을 위해 "나 + 외부 멤버" busy-time rows를 합치는 연결 tool입니다.
+#
+# 목표
+#   외부 SQLite/MCP 서버에 있는 Kana의 이전 대화와 공유 일정을 LangChain agent가 사용할 수 있게 감쌉니다.
+#   학생이 직접 SQL을 작성하는 주차가 아니라, MCP tool을 호출하는 wrapper tool을 만드는 주차입니다.
+#
+# 구현 대상
+#   1. search_previous_conversations
+#      - query, member_names, limit를 받습니다.
+#      - member_names가 있으면 normalize_external_member_names로 외부 DB 기준 이름으로 맞춥니다.
+#      - call_mcp_tool_sync("search_previous_conversations", args)를 호출하고 결과 문자열을 그대로 반환합니다.
+#
+#   2. load_conversation_messages
+#      - conversation_id를 MCP load_conversation_messages tool에 넘깁니다.
+#      - 대화 메시지의 speaker/content/created_at 순서가 보존되도록 결과를 가공하지 않습니다.
+#
+#   3. extract_schedules_from_history
+#      - member_names, date_from, date_to를 받습니다.
+#      - 이름과 날짜 범위를 수업용 fixture 기준으로 정규화한 뒤 MCP tool에 넘깁니다.
+#      - 결과 rows는 member_name/title/date/start_time/end_time/notes 필드를 유지해야 합니다.
+#
+#   4. create_shared_schedule / delete_shared_schedule
+#      - 내 일정이 외부 공유 일정 저장소에도 보이도록 생성/삭제 MCP tool을 호출합니다.
+#      - schedule_id 또는 source_conversation_id를 보존해야 나중에 수정/삭제 동기화가 가능합니다.
+#
+#   5. collect_member_schedules
+#      - 내 일정은 list_personal_schedule_dicts에서 가져옵니다.
+#      - 외부 멤버 일정은 extract_schedules_from_history_dict에서 가져옵니다.
+#      - 두 출처를 member_name/title/date/start_time/end_time/notes가 있는 같은 rows 배열로 합칩니다.
+#      - schedule_summary도 함께 반환해 LLM이 바쁜 시간을 자연어로 설명할 수 있게 합니다.
+#
+# 책임 경계
+#   mcp_server/sqlite_mcp_server.py의 @mcp.tool 구현은 학생 구현 대상이 아닙니다.
+#   이 파일의 wrapper tool은 직접 SQL을 작성하지 않고 call_mcp_tool_sync로 MCP 결과 JSON을 전달합니다.
+#   week05_tools()는 Week 1-4 도구에 외부 SQLite/MCP 일정 도구를 누적합니다.
+#
+# 검증 방법
+#   ./run.sh --week5에서 외부 팀원 일정 조회 요청을 입력합니다.
+#   trace에서 search_previous_conversations, load_conversation_messages, extract_schedules_from_history 중
+#   어떤 tool이 어떤 순서로 호출됐는지 확인합니다.
+#   collect_member_schedules 결과 rows에 "나"와 외부 멤버 일정이 같은 구조로 들어 있는지도 확인합니다.
 
 
 def _normalize_members(member_names: list[str]) -> list[str]:
@@ -75,9 +116,6 @@ def _run_coroutine_sync(coro: Any) -> Any:
 
 
 async def call_mcp_tool(tool_name: str, args: dict[str, Any], db_path: str | Path | None = None) -> str:
-    # [수강생 참고 코드 포인트]
-    # 로컬 MCP 서버에서 tool 목록을 불러온 뒤 이름으로 선택해 ainvoke합니다.
-    # 없는 tool 이름이 들어오면 사용 가능한 목록을 보여주는 오류를 내면 디버깅이 쉽습니다.
     tools = {item.name: item for item in await load_langchain_mcp_tools(db_path=db_path)}
     if tool_name not in tools:
         available = ", ".join(sorted(tools))
@@ -86,8 +124,6 @@ async def call_mcp_tool(tool_name: str, args: dict[str, Any], db_path: str | Pat
 
 
 def call_mcp_tool_sync(tool_name: str, args: dict[str, Any], db_path: str | Path | None = None) -> str:
-    # [수강생 참고 코드 포인트]
-    # LangChain tool 함수는 동기 함수로 쓰기 편하므로 async MCP 호출을 동기 wrapper로 감쌉니다.
     return _run_coroutine_sync(call_mcp_tool(tool_name=tool_name, args=args, db_path=db_path))
 
 
@@ -99,8 +135,6 @@ def search_previous_conversations(
 ) -> str:
     """외부 SQLite 데이터베이스에 저장된 이전 대화를 검색합니다."""
 
-    # [수강생 구현 포인트]
-    # member_names가 들어오면 외부 DB 기준 이름으로 정규화한 뒤 MCP의 search_previous_conversations tool에 넘깁니다.
     normalized_members = normalize_external_member_names(member_names) if member_names is not None else None
     return call_mcp_tool_sync(
         "search_previous_conversations",
@@ -112,8 +146,6 @@ def search_previous_conversations(
 def load_conversation_messages(conversation_id: str) -> str:
     """외부 SQLite 데이터베이스에서 특정 이전 대화의 모든 메시지를 불러옵니다."""
 
-    # [수강생 구현 포인트]
-    # conversation_id 하나로 대화 전체를 불러오는 단순 wrapper입니다.
     return call_mcp_tool_sync("load_conversation_messages", {"conversation_id": conversation_id})
 
 
@@ -121,8 +153,6 @@ def load_conversation_messages(conversation_id: str) -> str:
 def extract_schedules_from_history(member_names: list[str], date_from: str, date_to: str) -> str:
     """외부 SQLite 이전 대화에서 멤버별 일정을 추출합니다."""
 
-    # [수강생 구현 포인트]
-    # 멤버 이름과 날짜 범위를 수업용 외부 데이터 기준으로 정규화한 뒤 MCP 일정 추출 tool에 전달합니다.
     normalized_date_from, normalized_date_to = normalize_external_schedule_date_bounds(
         member_names,
         date_from,
@@ -151,9 +181,6 @@ def create_shared_schedule(
 ) -> str:
     """외부 MCP 공유 일정 저장소에 일정을 등록하거나 갱신합니다."""
 
-    # [수강생 구현 포인트]
-    # 내 일정이 공유 저장소에도 보여야 할 때 사용하는 wrapper입니다.
-    # source_conversation_id와 schedule_id를 같이 넘기면 이후 수정/삭제 동기화가 쉬워집니다.
     return call_mcp_tool_sync(
         "create_shared_schedule",
         {
@@ -176,8 +203,6 @@ def delete_shared_schedule(
 ) -> str:
     """외부 MCP 공유 일정 저장소에서 일정을 삭제합니다."""
 
-    # [수강생 구현 포인트]
-    # schedule_id 또는 source_conversation_id 중 하나로 공유 일정 복사본을 삭제합니다.
     return call_mcp_tool_sync(
         "delete_shared_schedule",
         {
@@ -191,10 +216,6 @@ def delete_shared_schedule(
 def collect_member_schedules(member_names: list[str], date_from: str, date_to: str) -> str:
     """내 일정과 다른 사람들의 일정을 MCP SQLite 기록에서 모읍니다."""
 
-    # [수강생 구현 포인트]
-    # 1. 내 개인 일정은 Week 1 Nana 도구에서 가져옵니다.
-    # 2. 외부 멤버 일정은 Week 5 MCP tool에서 가져옵니다.
-    # 3. 둘을 같은 row 모양으로 합쳐 Week 6 find_common_available_slots가 바로 읽게 만듭니다.
     ensure_demo_personal_schedule()
     normalized_members = _normalize_members(member_names)
     normalized_date_from, normalized_date_to = normalize_external_schedule_date_bounds(
@@ -233,9 +254,6 @@ def collect_member_schedules(member_names: list[str], date_from: str, date_to: s
 async def load_langchain_mcp_tools(db_path: str | Path | None = None) -> list[Any]:
     """LangChain MCP 어댑터로 로컬 MCP 서버의 SQLite 도구를 불러옵니다."""
 
-    # [수강생 참고 코드 포인트]
-    # MultiServerMCPClient에 stdio transport, Python 실행 파일, MCP 서버 스크립트 경로, DB 경로 env를 넘깁니다.
-    # 반환되는 객체들은 LangChain agent에 그대로 노출 가능한 tool입니다.
     from langchain_mcp_adapters.client import MultiServerMCPClient
 
     server_path = PACKAGE_ROOT / "mcp_server" / "sqlite_mcp_server.py"
@@ -280,8 +298,6 @@ def extract_schedules_from_history_dict(member_names: list[str], date_from: str,
 def week05_tools() -> list[Any]:
     """4주차까지의 도구에 외부 SQLite/MCP 일정 도구를 누적한 목록입니다."""
 
-    # [수강생 참고 코드 포인트]
-    # Week 4까지의 Nana tool에 외부 대화/공유 일정/MCP 수집 tool을 더합니다.
     return [
         *week04_tools(),
         search_previous_conversations,
@@ -291,3 +307,40 @@ def week05_tools() -> list[Any]:
         delete_shared_schedule,
         collect_member_schedules,
     ]
+
+
+def week05_system_prompt() -> str:
+    """5주차 단일 agent가 따르는 시스템 프롬프트입니다."""
+
+    return (
+        "너는 Kanana의 Week 5 Kana history agent다. "
+        f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
+        "개인 일정/저장/RAG 요청은 Week 1-4 tool chain을 사용한다. "
+        "외부 멤버의 이전 대화나 공유 일정이 필요하면 search_previous_conversations, "
+        "load_conversation_messages, extract_schedules_from_history를 사용한다. "
+        "내 일정과 외부 멤버 일정을 함께 모아야 하면 collect_member_schedules를 사용한다. "
+        "내 일정이 공유 저장소에도 보여야 할 때는 create_shared_schedule/delete_shared_schedule을 사용한다. "
+        "Week 5에서는 최종 회의 시간 결정 payload는 만들지 않고, 수집한 일정과 근거를 정리한다. "
+        "도구 결과에 없는 일정이나 시간을 만들지 않는다."
+    )
+
+
+def build_week05_agent() -> object:
+    """Week 1-5 누적 tool 목록을 노출하는 단일 LangChain agent를 만듭니다."""
+
+    if not CONFIG.has_openai_key:
+        raise RuntimeError("PROXY_TOKEN이 .env에 필요합니다.")
+    global _WEEK05_AGENT
+    if _WEEK05_AGENT is None:
+        _WEEK05_AGENT = create_agent(
+            model=chat_model(),
+            tools=week05_tools(),
+            system_prompt=week05_system_prompt(),
+        )
+    return _WEEK05_AGENT
+
+
+def build_week_agent() -> object:
+    """active-week registry가 호출하는 표준 Week agent builder입니다."""
+
+    return build_week05_agent()

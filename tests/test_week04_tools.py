@@ -8,7 +8,7 @@ from fixed.config import CONFIG
 
 
 def test_week04_course_rag_tools_use_real_chroma_openai_and_sqlite() -> None:
-    assert CONFIG.has_openai_key, "Week 4는 실제 OpenAI embedding 호출이 필요합니다. .env에 OPENAI_API_KEY를 설정하세요."
+    assert CONFIG.has_openai_key, "Week 4는 실제 embedding 호출이 필요합니다. .env에 PROXY_TOKEN을 설정하세요."
 
     token = f"week4-real-{uuid4().hex[:8]}"
     reference_text = f"{token} 중요한 회의는 오전 10시에서 12시 사이에 잡는 것을 선호한다."

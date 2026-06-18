@@ -3,21 +3,57 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from langchain.agents import create_agent
 from langchain.tools import tool
 
 from fixed.config import CONFIG
+from fixed.llm import chat_model
+from fixed.runtime_clock import current_app_date_iso
 from fixed.stores import AppSQLiteStore, PersonalReferenceStore
 from student_parts.week03_build_nanas_logbook import week03_tools
 
 
 REFERENCE_STORE = PersonalReferenceStore(CONFIG.chroma_dir)
 SQLITE_STORE = AppSQLiteStore(CONFIG.app_db_path)
+_WEEK04_AGENT: Any | None = None
 
 
 # [수강생 구현 가이드]
-# Week 4의 핵심 실습은 개인 참고자료 vector search와 SQLite 저장 요청 검색을 구분하는 것입니다.
-# search_personal_references와 search_saved_requests는 course repo 노트북의 canonical tool contract입니다.
-# search_nana_memory는 기존 앱 흐름을 위한 legacy 통합 검색 tool로 남겨 둡니다.
+#
+# 목표
+#   Nana가 "내가 적어 둔 참고자료"와 "SQLite에 저장된 일정/할 일 기록"을 구분해서 검색하게 합니다.
+#   Week 4의 핵심은 RAG를 하나의 마법 함수로 보지 않고, 데이터 출처별 검색 tool을 분리하는 것입니다.
+#
+# 구현 대상
+#   1. add_personal_reference
+#      - title/content/tags를 REFERENCE_STORE.add_personal_reference에 넘깁니다.
+#      - tags가 None이면 빈 list로 바꿉니다.
+#      - 반환 JSON에는 ok, tool_name, reference_backend, reference를 넣습니다.
+#
+#   2. search_personal_references
+#      - query와 top_k로 ChromaDB 개인 참고자료를 검색합니다.
+#      - course repo 기준 계약에 맞게 top-level {"hits": [...]} JSON을 반환합니다.
+#      - hit에는 id, content, distance, metadata(title/tags)가 들어가야 답변 근거로 쓰기 쉽습니다.
+#
+#   3. search_saved_requests
+#      - SQLITE_STORE.search_saved_requests(query, limit)를 호출합니다.
+#      - 검색 결과가 없으면 최근 저장 목록을 fallback으로 보여 줄 수 있습니다.
+#      - course repo 기준 계약에 맞게 top-level {"rows": [...]} JSON을 반환합니다.
+#
+# 출처 구분
+#   search_personal_references는 ChromaDB + OpenAI embedding 기반 reference 검색입니다.
+#   search_saved_requests는 SQLite structured_requests/schedules 계열 기록 검색입니다.
+#   LLM이 질문 성격에 따라 둘 중 하나 또는 둘 다 선택하도록 prompt가 준비되어 있습니다.
+#
+# 참고 코드
+#   search_nana_memory는 reference_backend와 context를 함께 확인하는 compatibility helper입니다.
+#   학생 핵심 구현 대상은 add/search_personal_references/search_saved_requests 3개입니다.
+#   week04_tools()는 Week 1-3 도구에 이 RAG 도구들을 누적합니다.
+#
+# 검증 방법
+#   참고자료를 추가한 뒤 관련 질문을 입력하고 trace에서 search_personal_references 호출을 확인합니다.
+#   저장된 일정/할 일 질문은 search_saved_requests가 호출되는지 확인합니다.
+#   결과 JSON의 top-level 키가 각각 hits, rows인지 꼭 확인하세요.
 
 
 def _safe_limit(limit: int, default: int = 5, maximum: int = 50) -> int:
@@ -60,8 +96,6 @@ def _course_reference_hits(query: str, top_k: int) -> list[dict[str, Any]]:
 def add_personal_reference(title: str, content: str, tags: list[str] | None = None) -> str:
     """개인 참고자료를 ChromaDB에 추가합니다."""
 
-    # [수강생 구현 포인트]
-    # title/content/tags를 PersonalReferenceStore에 저장하고, reference_backend를 함께 반환해 어떤 vector store를 썼는지 남깁니다.
     item = REFERENCE_STORE.add_personal_reference(title=title, content=content, tags=tags or [])
     return json.dumps(
         {
@@ -78,8 +112,6 @@ def add_personal_reference(title: str, content: str, tags: list[str] | None = No
 def search_personal_references(query: str, top_k: int = 2) -> str:
     """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
 
-    # [수강생 구현 포인트]
-    # course repo 노트북과 맞춰 top-level hits payload를 반환합니다.
     return json.dumps({"hits": _course_reference_hits(query=query, top_k=top_k)}, ensure_ascii=False)
 
 
@@ -87,8 +119,6 @@ def search_personal_references(query: str, top_k: int = 2) -> str:
 def search_saved_requests(query: str, top_k: int = 3) -> str:
     """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다."""
 
-    # [수강생 구현 포인트]
-    # course repo 노트북과 맞춰 top-level rows payload를 반환합니다.
     limit = _safe_limit(top_k, default=3, maximum=50)
     rows = SQLITE_STORE.search_saved_requests(query=query, limit=limit)
     if not rows:
@@ -106,11 +136,6 @@ def search_nana_memory(
 ) -> str:
     """개인 참고자료와 SQLite 저장 일정을 한 번에 검색하고 일정 chunk를 반환합니다."""
 
-    # [수강생 구현 포인트]
-    # 1. limit을 안전한 범위로 보정합니다.
-    # 2. ChromaDB에서 개인 참고자료를 검색합니다.
-    # 3. SQLite schedules 테이블을 query/date/attendee 조건으로 검색합니다.
-    # 4. 일정 row를 LLM이 읽기 쉬운 schedule_chunks와 context 문자열로 변환합니다.
     normalized_limit = _safe_limit(limit, default=5, maximum=20)
     reference_hits = REFERENCE_STORE.search_personal_references(query=query, limit=min(normalized_limit, 5))
 
@@ -146,8 +171,6 @@ def search_nana_memory(
     with SQLITE_STORE.connect() as conn:
         rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
 
-    # [수강생 구현 포인트]
-    # RAG에서는 DB row를 그대로 넘기기보다, chunk_id/content/metadata를 갖춘 작은 문서 조각으로 바꿔주는 것이 좋습니다.
     schedule_chunks: list[dict[str, Any]] = []
     for index, row in enumerate(rows):
         raw_attendees = row.pop("attendees_json", "[]")
@@ -187,9 +210,6 @@ def search_nana_memory(
         source = (chunk.get("metadata") or {}).get("source") or "unknown"
         lines.append(f"- {chunk.get('chunk_id')} | {chunk.get('content')} | source={source}")
     context = "\n".join(lines)
-    # [수강생 구현 포인트]
-    # context는 agent가 최종 답변을 만들 때 붙여 읽을 근거 문자열입니다.
-    # JSON payload에는 원본 hit와 chunk도 같이 넣어 trace에서 검증할 수 있게 합니다.
     return json.dumps(
         {
             "ok": True,
@@ -226,11 +246,45 @@ def search_nana_memory_dict(
 def week04_tools() -> list[Any]:
     """3주차까지의 도구에 4주차 RAG 도구를 누적한 목록입니다."""
 
-    # [수강생 참고 코드 포인트]
-    # Week 3까지의 저장/조회 tool에 course repo 기준 RAG 입력/검색 tool을 추가합니다.
     return [
         *week03_tools(),
         add_personal_reference,
         search_personal_references,
         search_saved_requests,
     ]
+
+
+def week04_system_prompt() -> str:
+    """4주차 단일 agent가 따르는 시스템 프롬프트입니다."""
+
+    return (
+        "너는 Kanana의 Week 4 Nana memory agent다. "
+        f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
+        "개인 일정/할 일/알림 생성과 저장은 Week 1-3 tool chain을 사용한다. "
+        "개인 참고자료를 추가해야 할 때만 add_personal_reference를 사용한다. "
+        "개인 참고자료 질문은 search_personal_references의 hits를 근거로 답한다. "
+        "저장된 일정, 할 일, 알림 질문은 search_saved_requests의 rows를 근거로 답한다. "
+        "Week 4에서는 외부 멤버 이전 대화나 그룹 일정 최종 조율을 처리하지 않는다. "
+        "도구 결과에 없는 사실은 만들지 않는다."
+    )
+
+
+def build_week04_agent() -> object:
+    """Week 1-4 누적 tool 목록을 노출하는 단일 LangChain agent를 만듭니다."""
+
+    if not CONFIG.has_openai_key:
+        raise RuntimeError("PROXY_TOKEN이 .env에 필요합니다.")
+    global _WEEK04_AGENT
+    if _WEEK04_AGENT is None:
+        _WEEK04_AGENT = create_agent(
+            model=chat_model(),
+            tools=week04_tools(),
+            system_prompt=week04_system_prompt(),
+        )
+    return _WEEK04_AGENT
+
+
+def build_week_agent() -> object:
+    """active-week registry가 호출하는 표준 Week agent builder입니다."""
+
+    return build_week04_agent()

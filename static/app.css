@@ -86,33 +86,52 @@ footer[aria-label="Gradio footer navigation"] {
 
 .sidebar,
 .column.sidebar {
+  background: #fffdf7 !important;
+  border-color: #eee6cb !important;
   flex-wrap: nowrap !important;
-  gap: 4px !important;
+  gap: 8px !important;
   max-height: calc(100vh - 150px);
   overflow: auto;
   overflow-x: hidden;
 }
 
+.sidebar::-webkit-scrollbar,
+.column.sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sidebar::-webkit-scrollbar-thumb,
+.column.sidebar::-webkit-scrollbar-thumb {
+  background: #e9dfbd;
+  border-radius: 999px;
+}
+
 .primary-action {
   background: var(--kanana-yellow) !important;
   border: 1px solid #e0c800 !important;
+  border-radius: 8px !important;
   color: #1f1f1f !important;
   font-weight: 700 !important;
+  min-height: 46px !important;
+  box-shadow: 0 8px 18px rgba(47, 39, 12, 0.08) !important;
 }
 
 .ghost-action {
-  background: #ffffff !important;
-  border: 1px solid var(--kanana-line) !important;
-  color: var(--kanana-muted) !important;
-  margin-top: 12px !important;
+  background: #fffdf7 !important;
+  border: 1px solid #dfd8c8 !important;
+  border-radius: 8px !important;
+  color: #69645a !important;
+  margin-top: auto !important;
+  min-height: 44px !important;
 }
 
 .danger-action {
   background: #fff7f7 !important;
   border: 1px solid #f1c1c1 !important;
+  border-radius: 8px !important;
   color: #b42318 !important;
   font-weight: 700 !important;
-  margin-top: 6px !important;
+  min-height: 44px !important;
 }
 
 .danger-action:hover {
@@ -120,27 +139,30 @@ footer[aria-label="Gradio footer navigation"] {
 }
 
 .conversation-list-title {
-  color: var(--kanana-muted);
+  color: #8a8273;
   font-size: 12px;
   font-weight: 800;
-  margin: 14px 2px 6px;
+  letter-spacing: 0;
+  margin: 16px 4px 2px;
 }
 
 .conversation-list-item {
   align-items: center !important;
-  background: transparent !important;
-  border: 0 !important;
+  background: #ffffff !important;
+  border: 1px solid #eee6cb !important;
   border-radius: 8px !important;
-  box-shadow: none !important;
+  box-shadow: 0 3px 10px rgba(47, 39, 12, 0.04) !important;
   color: #2b2b2b !important;
   display: flex !important;
   font-size: 13px !important;
-  font-weight: 500 !important;
+  font-weight: 700 !important;
   justify-content: flex-start !important;
-  margin: 1px 0 !important;
-  min-height: 36px !important;
+  line-height: 1.35 !important;
+  margin: 0 !important;
+  min-height: 44px !important;
   overflow: hidden !important;
-  padding: 8px 10px !important;
+  padding: 10px 12px !important;
+  position: relative !important;
   text-align: left !important;
   text-overflow: ellipsis !important;
   white-space: nowrap !important;
@@ -157,8 +179,16 @@ footer[aria-label="Gradio footer navigation"] {
   width: 100% !important;
 }
 
-.conversation-list-item:hover {
-  background: #fff6c7 !important;
+.conversation-list-item:hover,
+.conversation-list-item:focus-within {
+  background: #fff8d6 !important;
+  border-color: #ead16a !important;
+  transform: translateY(-1px);
+}
+
+.conversation-list-item:has(button:focus-visible) {
+  outline: 2px solid rgba(254, 229, 0, 0.6) !important;
+  outline-offset: 2px;
 }
 
 .chat-panel {
@@ -186,6 +216,16 @@ footer[aria-label="Gradio footer navigation"] {
 
 #kanana-chatbot .message {
   border-radius: 8px !important;
+}
+
+#kanana-chatbot small {
+  color: var(--kanana-muted);
+  display: block;
+  font-size: 11px;
+  line-height: 1.35;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .composer {

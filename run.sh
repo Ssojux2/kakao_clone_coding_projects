@@ -10,8 +10,10 @@ usage() {
 Kanana Schedule Agent runner
 
 Usage:
-  ./run.sh                 Sync uv env if needed, then run the Gradio app
-  ./run.sh --install       Run uv sync, then run the Gradio app
+  ./run.sh                 Run the Week 1 Gradio app
+  ./run.sh --weekN         Run the selected week app, where N is 1-6
+  ./run.sh --weekN --test  Run pytest + golden scenario tests for the selected week env
+  ./run.sh --install       Run uv sync, then run the Week 1 Gradio app
   ./run.sh --golden        Run golden scenario tests with uv
   ./run.sh --test          Run pytest + golden scenario tests with uv
   ./run.sh --make-student-copy [DIR]
@@ -37,6 +39,12 @@ run_uv() {
     exit 1
   fi
 
+  local active_week="${KANANA_ACTIVE_WEEK:-1}"
+  if [[ "${1:-}" =~ ^--week([1-6])$ ]]; then
+    active_week="${BASH_REMATCH[1]}"
+    shift
+  fi
+  export KANANA_ACTIVE_WEEK="$active_week"
   export PYTHONNOUSERSITE=1
 
   case "${1:-}" in
@@ -57,6 +65,9 @@ run_uv() {
     --make-student-copy)
       uv run python -m scripts.make_student_distribution "${2:-}"
       ;;
+    --help|-h)
+      usage
+      ;;
     *)
       echo "알 수 없는 옵션입니다: $1" >&2
       usage >&2
@@ -74,6 +85,13 @@ run_conda() {
     echo "conda를 찾을 수 없습니다. Miniconda 또는 Anaconda를 먼저 설치해주세요." >&2
     exit 1
   fi
+
+  local active_week="${KANANA_ACTIVE_WEEK:-1}"
+  if [[ "${1:-}" =~ ^--week([1-6])$ ]]; then
+    active_week="${BASH_REMATCH[1]}"
+    shift
+  fi
+  export KANANA_ACTIVE_WEEK="$active_week"
 
   CONDA_BASE="$(conda info --base)"
   # shellcheck source=/dev/null
@@ -111,6 +129,9 @@ run_conda() {
       ;;
     --make-student-copy)
       python -m scripts.make_student_distribution "${2:-}"
+      ;;
+    --help|-h)
+      usage
       ;;
     *)
       echo "알 수 없는 conda 옵션입니다: $1" >&2

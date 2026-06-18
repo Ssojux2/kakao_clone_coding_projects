@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fixed.config import CONFIG
+from fixed.config import CONFIG, PROXY_TOKEN_PLACEHOLDER
 from fixed.runtime_clock import app_started_at_iso, next_weekday_iso
 
 EXTERNAL_MEMBER_ALIAS: dict[str, str] = {}
@@ -1043,25 +1043,26 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
 class OpenAIEmbeddingFunction:
     """ChromaDB가 호출할 수 있는 OpenAI embeddings adapter입니다."""
 
-    def __init__(self, api_key: str | None, model: str):
+    def __init__(self, api_key: str | None, base_url: str, model: str):
         self.api_key = api_key
+        self.base_url = base_url
         self.model = model
         self._client: Any | None = None
 
     def name(self) -> str:
-        return f"openai_{self.model}"
+        return f"openai_{self.model}".replace("/", "_")
 
     def is_legacy(self) -> bool:
         # ChromaDB의 custom embedding function 호환 경로를 사용합니다.
         return True
 
     def _openai_client(self) -> Any:
-        if not self.api_key:
-            raise RuntimeError("OPENAI_API_KEY가 필요합니다. .env에 키를 추가한 뒤 다시 실행하세요.")
+        if not self.api_key or self.api_key.strip() == PROXY_TOKEN_PLACEHOLDER:
+            raise RuntimeError("PROXY_TOKEN이 필요합니다. .env에 키를 추가한 뒤 다시 실행하세요.")
         if self._client is None:
             from openai import OpenAI
 
-            self._client = OpenAI(api_key=self.api_key)
+            self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         return self._client
 
     def __call__(self, input: list[str]) -> list[list[float]]:
@@ -1078,8 +1079,8 @@ class OpenAIEmbeddingFunction:
 class PersonalReferenceStore:
     """Week 4 개인 참고자료 RAG 저장소입니다.
 
-    참고자료는 ChromaDB에 저장하고, 벡터는 `.env`의 OpenAI embedding 설정으로
-    생성합니다. OPENAI_API_KEY가 없으면 앱 import는 가능하지만 실제 add/query
+    참고자료는 ChromaDB에 저장하고, 벡터는 `.env`의 embedding proxy 설정으로
+    생성합니다. PROXY_TOKEN이 없으면 앱 import는 가능하지만 실제 add/query
     시점에 명확한 오류를 냅니다.
     """
 
@@ -1114,7 +1115,8 @@ class PersonalReferenceStore:
         self.collection = client.get_or_create_collection(
             self.COLLECTION_NAME,
             embedding_function=OpenAIEmbeddingFunction(
-                api_key=CONFIG.openai_api_key,
+                api_key=CONFIG.proxy_token,
+                base_url=CONFIG.embedding_proxy_url,
                 model=CONFIG.openai_embedding_model,
             ),
             metadata={
@@ -1133,6 +1135,7 @@ class PersonalReferenceStore:
             "vector_store": "chromadb",
             "embedding_provider": "openai",
             "embedding_model": CONFIG.openai_embedding_model,
+            "embedding_base_url": CONFIG.embedding_proxy_url,
             "collection_name": self.COLLECTION_NAME,
             "chroma_dir": str(self.chroma_dir),
         }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import sys
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from fixed.agent_runtime import AgentRuntime
 runtime = AgentRuntime()
 CSS_PATH = STATIC_DIR / "app.css"
 MAX_CONVERSATION_BUTTONS = 12
+DEFAULT_PENDING_STATUS = "답변을 진행중입니다"
 ENTER_TO_SEND_HEAD = """
 <style>
 @media (min-width: 981px) {
@@ -34,6 +36,62 @@ function setKananaTextareaValue(textarea, value) {
   textarea.dispatchEvent(new Event("input", { bubbles: true }));
   textarea.dispatchEvent(new Event("change", { bubbles: true }));
 }
+
+(function setupKananaPendingCleanup() {
+  if (window.__kananaPendingCleanupReady) return;
+  window.__kananaPendingCleanupReady = true;
+
+  function isKananaPendingMessage(message) {
+    const small = message?.querySelector("small");
+    const status = (small?.textContent || "").trim();
+    return status === "답변을 진행중입니다" || (status.startsWith("현재 ") && status.endsWith(" 실행 중"));
+  }
+
+  function hideKananaPendingPanel(panel) {
+    panel.hidden = true;
+    panel.style.display = "none";
+    panel.setAttribute("aria-hidden", "true");
+  }
+
+  window.cleanupKananaPendingMessages = function cleanupKananaPendingMessages() {
+    const chatbot = document.querySelector("#kanana-chatbot");
+    if (!chatbot) return;
+
+    const messageGroups = new Set();
+    chatbot.querySelectorAll("[data-testid='bot']").forEach((botMessage) => {
+      const messagePanel = botMessage.closest(".message");
+      if (messagePanel?.parentElement) {
+        messageGroups.add(messagePanel.parentElement);
+      }
+    });
+
+    messageGroups.forEach((group) => {
+      const panels = Array.from(group.children).filter((child) => child.classList?.contains("message"));
+      const pendingPanels = panels.filter(isKananaPendingMessage);
+      const finalPanels = panels.filter((panel) => !isKananaPendingMessage(panel) && (panel.textContent || "").trim());
+
+      if (finalPanels.length > 0) {
+        pendingPanels.forEach(hideKananaPendingPanel);
+        return;
+      }
+
+      pendingPanels.slice(0, -1).forEach(hideKananaPendingPanel);
+    });
+  };
+
+  function observeKananaPendingMessages() {
+    if (!document.body) return;
+    const observer = new MutationObserver(window.cleanupKananaPendingMessages);
+    observer.observe(document.body, { childList: true, subtree: true });
+    window.cleanupKananaPendingMessages();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", observeKananaPendingMessages, { once: true });
+  } else {
+    observeKananaPendingMessages();
+  }
+})();
 
 document.addEventListener("keydown", function(event) {
   const target = event.target;
@@ -111,6 +169,33 @@ def _chat_notice() -> list[dict[str, str]]:
     return []
 
 
+def _pending_assistant_message(status_text: str = DEFAULT_PENDING_STATUS) -> dict[str, str]:
+    return {"role": "assistant", "content": f"...\n\n<small>{html.escape(status_text)}</small>"}
+
+
+def _is_pending_assistant_message(message: dict[str, Any] | None) -> bool:
+    if not message or message.get("role") != "assistant":
+        return False
+    content = str(message.get("content") or "").strip()
+    has_default_status = DEFAULT_PENDING_STATUS in content
+    has_tool_status = "현재 " in content and " 실행 중" in content
+    return content.startswith("...") and (has_default_status or has_tool_status)
+
+
+def _replace_pending_status(history: list[dict[str, Any]], status_text: str) -> list[dict[str, Any]]:
+    pending_message = _pending_assistant_message(status_text)
+    if history and _is_pending_assistant_message(history[-1]):
+        return [*history[:-1], pending_message]
+    return [*history, pending_message]
+
+
+def _replace_pending_with_answer(history: list[dict[str, Any]], answer: str) -> list[dict[str, Any]]:
+    assistant_message = {"role": "assistant", "content": answer}
+    if history and _is_pending_assistant_message(history[-1]):
+        return [*history[:-1], assistant_message]
+    return [*history, assistant_message]
+
+
 def _conversation_rows() -> list[dict[str, str]]:
     rows = runtime.app_store.list_conversations()
     return [
@@ -160,6 +245,7 @@ def queue_user_message(
     history = [
         *history,
         {"role": "user", "content": message},
+        _pending_assistant_message(),
     ]
     return (
         history,
@@ -176,11 +262,11 @@ def finish_agent_response(
     pending_message: str,
     history: list[dict[str, Any]] | None,
     conversation_id: str | None,
-) -> tuple:
+) -> Any:
     history = history or []
     pending_message = (pending_message or "").strip()
     if not pending_message:
-        return (
+        yield (
             history,
             {},
             conversation_id or "",
@@ -189,18 +275,33 @@ def finish_agent_response(
             gr.update(interactive=True),
             *_conversation_button_updates(conversation_id),
         )
+        return
 
-    result = runtime.run_agent(pending_message, conversation_id or None)
-    history = [*history, {"role": "assistant", "content": result.answer}]
-    return (
-        history,
-        result.trace,
-        result.conversation_id,
-        gr.update(interactive=True),
-        "",
-        gr.update(interactive=True),
-        *_conversation_button_updates(result.conversation_id),
-    )
+    active_conversation_id = conversation_id or None
+    for event in runtime.stream_agent(pending_message, active_conversation_id):
+        if event.status_text:
+            history = _replace_pending_status(history, event.status_text)
+            yield (
+                history,
+                {"mode": "pending", "status": event.status_text},
+                conversation_id or "",
+                gr.update(interactive=False),
+                pending_message,
+                gr.update(interactive=False),
+                *_conversation_button_updates(conversation_id),
+            )
+        if event.result:
+            history = _replace_pending_with_answer(history, event.result.answer)
+            yield (
+                history,
+                event.result.trace,
+                event.result.conversation_id,
+                gr.update(interactive=True),
+                "",
+                gr.update(interactive=True),
+                *_conversation_button_updates(event.result.conversation_id),
+            )
+            return
 
 
 def new_chat() -> tuple:
@@ -300,7 +401,7 @@ def build_demo() -> gr.Blocks:
             finish_agent_response,
             inputs=[pending_message, chatbot, conversation_id],
             outputs=finish_outputs,
-            show_progress="minimal",
+            show_progress="hidden",
         )
         new_btn.click(new_chat, outputs=[chatbot, trace_json, conversation_id, *conversation_buttons])
         archive_btn.click(archive_chat, inputs=[conversation_id], outputs=[chatbot, trace_json, conversation_id, *conversation_buttons])
@@ -328,5 +429,5 @@ def build_demo() -> gr.Blocks:
 
 if __name__ == "__main__":
     if not CONFIG.has_openai_key:
-        print("주의: 프롬프트 기반 에이전트 채팅에는 .env의 OPENAI_API_KEY가 필요합니다.")
+        print("주의: 프롬프트 기반 에이전트 채팅에는 .env의 PROXY_TOKEN이 필요합니다.")
     build_demo().launch(css_paths=[str(CSS_PATH)], head=ENTER_TO_SEND_HEAD)

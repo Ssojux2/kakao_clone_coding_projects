@@ -7,7 +7,7 @@ from fixed.config import CONFIG
 
 
 def test_week02_extract_schedule_request_uses_real_openai_structured_output() -> None:
-    assert CONFIG.has_openai_key, "Week 2는 실제 OpenAI structured output 호출이 필요합니다. .env에 OPENAI_API_KEY를 설정하세요."
+    assert CONFIG.has_openai_key, "Week 2는 실제 structured output 호출이 필요합니다. .env에 PROXY_TOKEN을 설정하세요."
 
     result = json.loads(
         week02_module.extract_schedule_request.invoke(

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import fixed.runtime_clock as runtime_clock
+import fixed.agent_runtime as runtime_module
+import student_parts.agent_registry as agent_registry
 from fixed.agent_runtime import AgentRuntime
 from fixed.stores import AppSQLiteStore
+from student_parts.agent_registry import ActiveWeekAgentResult
+from student_parts.week05_load_kanas_past_conversations import extract_schedules_from_history
 from student_parts.week06_kanamate_decides_schedule import (
     agent_tool_names,
     decide_final_slot,
@@ -58,53 +63,76 @@ def test_week06_common_slots_accept_iso_datetime_date_bounds() -> None:
     assert all(row["date"] == target_day for row in result["busy_rows"] if row["member_name"] != "나")
 
 
-def test_week06_runtime_direct_external_lookup_lists_all_times(tmp_path, monkeypatch) -> None:
+def test_runtime_passes_active_week_and_recent_messages(tmp_path, monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run_active_week_agent(active_week: int, messages: list[dict[str, str]]) -> ActiveWeekAgentResult:
+        seen["active_week"] = active_week
+        seen["messages"] = messages
+        return ActiveWeekAgentResult(answer="mock answer", trace={"events": [{"event": "mock"}]})
+
+    monkeypatch.setattr(runtime_module, "run_active_week_agent", fake_run_active_week_agent)
+    runtime = AgentRuntime(active_week=4)
+    runtime.app_store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    conversation_id = runtime.ensure_conversation(None, "첫 메시지")
+    for index in range(15):
+        runtime.app_store.append_message(conversation_id, "user", f"이전 사용자 {index}")
+        runtime.app_store.append_message(conversation_id, "assistant", f"이전 답변 {index}")
+
+    result = runtime.run_agent("새 요청", conversation_id)
+
+    assert seen["active_week"] == 4
+    assert result.answer == "mock answer"
+    assert result.trace["conversation_id"] == conversation_id
+    messages = seen["messages"]
+    assert isinstance(messages, list)
+    assert len(messages) == 13
+    assert messages[-1] == {"role": "user", "content": "새 요청"}
+    assert all(message["role"] in {"user", "assistant"} for message in messages)
+
+
+def test_agent_registry_imports_only_selected_week(monkeypatch) -> None:
+    imported_modules: list[str] = []
+
+    class FakeAgent:
+        def invoke(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"messages": [{"role": "assistant", "content": "week agent ok"}]}
+
+    class FakeModule:
+        @staticmethod
+        def build_week_agent() -> FakeAgent:
+            return FakeAgent()
+
+    def fake_import_module(module_name: str) -> FakeModule:
+        imported_modules.append(module_name)
+        return FakeModule()
+
+    monkeypatch.setattr(agent_registry, "CONFIG", SimpleNamespace(has_openai_key=True))
+    monkeypatch.setattr(agent_registry.importlib, "import_module", fake_import_module)
+
+    result = agent_registry.run_active_week_agent(1, [{"role": "user", "content": "테스트"}])
+
+    assert imported_modules == ["student_parts.week01_wake_up_nana"]
+    assert result.answer == "week agent ok"
+    assert result.trace["active_week"] == 1
+
+
+def test_week05_external_schedule_tool_lists_all_times(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("KANANA_EXTERNAL_DB_PATH", str(tmp_path / "external.sqlite3"))
-    runtime = AgentRuntime()
-    runtime.app_store = AppSQLiteStore(tmp_path / "app.sqlite3")
 
-    result = runtime.run_agent("외부 팀원들 일정 조회해줘", None)
-
-    assert result.trace["mode"] == "mcp_direct_external_schedule_lookup"
-    assert f"{runtime_clock.next_weekday_iso(1)} 11:00-12:00" in result.answer
-    assert f"{runtime_clock.next_weekday_iso(2)} 13:00-14:00" in result.answer
-    assert f"{runtime_clock.next_weekday_iso(2)} 15:00-16:00" in result.answer
-    assert f"{runtime_clock.next_weekday_iso(3)} 14:00-15:00" in result.answer
-    assert f"{runtime_clock.next_weekday_iso(3)} 16:00-17:00" in result.answer
-    assert "영희의 일정은 확인되지 않았습니다" not in result.answer
-
-
-def test_week06_runtime_shared_schedule_lookup_understands_other_people_wording(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("KANANA_EXTERNAL_DB_PATH", str(tmp_path / "shared_wording.sqlite3"))
-    runtime = AgentRuntime()
-    runtime.app_store = AppSQLiteStore(tmp_path / "app.sqlite3")
-
-    result = runtime.run_agent("다른 사람들이 일정이 어떻게 돼 공유 일정에서 확인해줘.", None)
-
-    assert result.trace["mode"] == "mcp_direct_external_schedule_lookup"
-    assert "현재 공유 일정 저장소 기준 일정입니다." in result.answer
-    assert "철수 | 영업 미팅" in result.answer
-    assert "영희 | 리서치 리뷰" in result.answer
-
-
-def test_week06_runtime_shared_schedule_lookup_includes_my_synced_schedule(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("KANANA_EXTERNAL_DB_PATH", str(tmp_path / "shared_with_me.sqlite3"))
-    runtime = AgentRuntime()
-    runtime.app_store = AppSQLiteStore(tmp_path / "app.sqlite3")
-    target_day = runtime_clock.next_weekday_iso(1)
-    runtime.app_store.save_structured_request(
-        {
-            "kind": "personal_schedule",
-            "title": "전략 회의",
-            "date": target_day,
-            "start_time": "10:00",
-            "end_time": "11:00",
-            "members": ["나"],
-        }
+    payload = json.loads(
+        extract_schedules_from_history.invoke(
+            {
+                "member_names": ["철수", "영희"],
+                "date_from": runtime_clock.next_weekday_iso(1),
+                "date_to": runtime_clock.next_weekday_iso(3),
+            }
+        )
     )
+    summary = payload["schedule_summary"]
 
-    result = runtime.run_agent("공유 일정 조회해줘.", None)
-
-    assert result.trace["mode"] == "mcp_direct_external_schedule_lookup"
-    assert f"나 | 전략 회의 | {target_day} 10:00-11:00" in result.answer
-    assert "철수 | 영업 미팅" in result.answer
+    assert f"{runtime_clock.next_weekday_iso(1)} 11:00-12:00" in summary
+    assert f"{runtime_clock.next_weekday_iso(2)} 13:00-14:00" in summary
+    assert f"{runtime_clock.next_weekday_iso(2)} 15:00-16:00" in summary
+    assert f"{runtime_clock.next_weekday_iso(3)} 14:00-15:00" in summary
+    assert f"{runtime_clock.next_weekday_iso(3)} 16:00-17:00" in summary
