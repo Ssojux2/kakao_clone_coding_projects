@@ -49,9 +49,10 @@ _WEEK05_AGENT: Any | None = None
 #      - 이름과 날짜 범위를 수업용 fixture 기준으로 정규화한 뒤 MCP tool에 넘깁니다.
 #      - 결과 rows는 member_name/title/date/start_time/end_time/notes 필드를 유지해야 합니다.
 #
-#   4. create_shared_schedule / delete_shared_schedule
-#      - 내 일정이 외부 공유 일정 저장소에도 보이도록 생성/삭제 MCP tool을 호출합니다.
+#   4. create_shared_schedule / delete_shared_schedule / list_shared_schedules
+#      - 내 일정이 외부 공유 일정 저장소에도 보이도록 생성/삭제/조회 MCP tool을 호출합니다.
 #      - schedule_id 또는 source_conversation_id를 보존해야 나중에 수정/삭제 동기화가 가능합니다.
+#      - 공유 저장소 자체를 확인할 때는 list_shared_schedules로 "나"를 포함한 등록 row를 조회합니다.
 #
 #   5. collect_member_schedules
 #      - 내 일정은 list_personal_schedule_dicts에서 가져옵니다.
@@ -213,6 +214,28 @@ def delete_shared_schedule(
 
 
 @tool
+def list_shared_schedules(
+    member_names: list[str] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    source_conversation_id: str | None = None,
+    limit: int = 50,
+) -> str:
+    """외부 MCP 공유 일정 저장소에 등록된 일정을 조회합니다."""
+
+    return call_mcp_tool_sync(
+        "list_shared_schedules",
+        {
+            "member_names": member_names,
+            "date_from": date_from,
+            "date_to": date_to,
+            "source_conversation_id": source_conversation_id,
+            "limit": limit,
+        },
+    )
+
+
+@tool
 def collect_member_schedules(member_names: list[str], date_from: str, date_to: str) -> str:
     """내 일정과 다른 사람들의 일정을 MCP SQLite 기록에서 모읍니다."""
 
@@ -305,6 +328,7 @@ def week05_tools() -> list[Any]:
         extract_schedules_from_history,
         create_shared_schedule,
         delete_shared_schedule,
+        list_shared_schedules,
         collect_member_schedules,
     ]
 
@@ -316,8 +340,9 @@ def week05_system_prompt() -> str:
         "너는 Kanana의 Week 5 Kana history agent다. "
         f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
         "개인 일정/저장/RAG 요청은 Week 1-4 tool chain을 사용한다. "
-        "외부 멤버의 이전 대화나 공유 일정이 필요하면 search_previous_conversations, "
+        "외부 멤버의 이전 대화나 일정 추출이 필요하면 search_previous_conversations, "
         "load_conversation_messages, extract_schedules_from_history를 사용한다. "
+        "공유 일정 저장소에 등록된 row 자체를 확인해야 하면 list_shared_schedules를 사용한다. "
         "내 일정과 외부 멤버 일정을 함께 모아야 하면 collect_member_schedules를 사용한다. "
         "내 일정이 공유 저장소에도 보여야 할 때는 create_shared_schedule/delete_shared_schedule을 사용한다. "
         "Week 5에서는 최종 회의 시간 결정 payload는 만들지 않고, 수집한 일정과 근거를 정리한다. "

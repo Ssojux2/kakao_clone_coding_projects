@@ -47,6 +47,7 @@ TODO_TARGETS: dict[str, dict[str, str]] = {
         "extract_schedules_from_history": "Week 5: 멤버와 날짜 범위로 외부 일정 row를 추출하세요.",
         "create_shared_schedule": "Week 5: 외부 MCP 공유 일정 생성/갱신 tool wrapper를 구현하세요.",
         "delete_shared_schedule": "Week 5: 외부 MCP 공유 일정 삭제 tool wrapper를 구현하세요.",
+        "list_shared_schedules": "Week 5: 외부 MCP 공유 일정 조회 tool wrapper를 구현하세요.",
         "collect_member_schedules": "Week 5: 내 일정과 외부 멤버 일정을 그룹 조율용 busy-time으로 합치세요.",
     },
     "student_parts/week06_kanamate_decides_schedule.py": {

@@ -35,6 +35,7 @@ from student_parts.week05_load_kanas_past_conversations import (
     _normalize_members,
     collect_member_schedules,
     extract_schedules_from_history,
+    list_shared_schedules,
     load_conversation_messages,
     search_previous_conversations,
 )
@@ -144,6 +145,7 @@ def _kana_capability_text() -> str:
         "먼저 extract_schedule_request로 날짜와 멤버를 구조화한다.",
         "이전 대화 원문이 필요하면 search_previous_conversations나 load_conversation_messages를 쓴다.",
         "멤버별 바쁜 시간은 extract_schedules_from_history 또는 collect_member_schedules로 확인한다.",
+        "공유 일정 저장소 자체에 등록된 row를 확인해야 하면 list_shared_schedules를 사용한다.",
         "사용자가 '외부 팀원들 일정 조회해줘'처럼 멤버를 지정하지 않고 외부 팀원 일정을 묻는 경우 "
         "기본 외부 팀원인 철수와 영희의 다음 주 화요일부터 목요일까지 일정을 extract_schedules_from_history로 조회해 요약한다.",
         "외부 팀원 일정 조회 답변은 tool 결과의 schedule_summary 또는 rows를 기준으로 모든 일정을 빠짐없이 나열한다. "
@@ -488,6 +490,7 @@ def kana_tools() -> list[Any]:
         search_previous_conversations,
         load_conversation_messages,
         extract_schedules_from_history,
+        list_shared_schedules,
         collect_member_schedules,
         decide_final_slot,
     ]

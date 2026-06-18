@@ -82,7 +82,12 @@ def test_week_tool_lists_accumulate_previous_weeks() -> None:
     assert week3 <= week4
     assert {"add_personal_reference", "search_personal_references", "search_saved_requests"} <= week4
     assert week4 <= week5
-    assert {"search_previous_conversations", "extract_schedules_from_history", "collect_member_schedules"} <= week5
+    assert {
+        "search_previous_conversations",
+        "extract_schedules_from_history",
+        "list_shared_schedules",
+        "collect_member_schedules",
+    } <= week5
 
 
 def test_week1_create_schedule_returns_db_ready_structured_output(tmp_path) -> None:

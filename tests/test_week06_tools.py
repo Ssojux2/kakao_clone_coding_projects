@@ -20,7 +20,7 @@ from student_parts.week06_kanamate_decides_schedule import (
 def test_week06_kana_tools_include_slot_decision_chain() -> None:
     kana_tools = set(agent_tool_names("kana_agent"))
 
-    assert {"search_previous_conversations", "extract_schedules_from_history", "decide_final_slot"} <= kana_tools
+    assert {"search_previous_conversations", "extract_schedules_from_history", "list_shared_schedules", "decide_final_slot"} <= kana_tools
 
 
 def test_week06_common_slots_feed_final_slot() -> None:

@@ -367,11 +367,11 @@ def build_demo() -> gr.Blocks:
                             height=680,
                             show_label=False,
                             elem_id="kanana-chatbot",
-                            placeholder="무엇을 도와드릴까요?",
+                            placeholder="",
                         )
                         with gr.Row(elem_classes=["composer"]):
                             textbox = gr.Textbox(
-                                placeholder="철수 영희와 다음 주 회의 시간을 잡아줘",
+                                placeholder="",
                                 show_label=False,
                                 lines=2,
                                 elem_id="kanana-input",

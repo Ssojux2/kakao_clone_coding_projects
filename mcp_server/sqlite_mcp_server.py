@@ -112,5 +112,33 @@ def delete_shared_schedule(
     )
 
 
+@mcp.tool()
+def list_shared_schedules(
+    member_names: list[str] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    source_conversation_id: str | None = None,
+    limit: int = 50,
+) -> str:
+    """공유 일정 저장소에 등록된 일정을 필터링해 조회합니다."""
+
+    rows = STORE.list_shared_schedules(
+        member_names=member_names,
+        date_from=date_from,
+        date_to=date_to,
+        source_conversation_id=source_conversation_id,
+        limit=limit,
+    )
+    return json.dumps(
+        {
+            "ok": True,
+            "tool_name": "list_shared_schedules",
+            "rows": rows,
+            "schedule_summary": external_schedule_summary(rows),
+        },
+        ensure_ascii=False,
+    )
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

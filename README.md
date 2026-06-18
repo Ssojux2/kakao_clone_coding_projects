@@ -100,7 +100,7 @@ conda 환경이 필요한 경우에는 기존 `environment.yml` 기반 runner를
   - `week04_tools()`는 Week 1-3 도구에 RAG 도구를 누적합니다.
 - Week 5: `student_parts/week05_load_kanas_past_conversations.py`, `mcp_server/sqlite_mcp_server.py`
   - `search_previous_conversations`, `load_conversation_messages`, `extract_schedules_from_history`
-  - `create_shared_schedule`, `delete_shared_schedule`, `collect_member_schedules`
+  - `create_shared_schedule`, `delete_shared_schedule`, `list_shared_schedules`, `collect_member_schedules`
   - LLM이 MCP SQLite 이전 대화 검색, 메시지 로드, 일정 추출 tool을 조합
   - `mcp_server/sqlite_mcp_server.py`의 MCP tool 구현은 학생 구현 대상이 아니라 기준 구현/참고 코드로 유지합니다.
   - `week05_tools()`는 Week 1-4 도구에 외부 SQLite/MCP 일정 도구를 누적합니다.

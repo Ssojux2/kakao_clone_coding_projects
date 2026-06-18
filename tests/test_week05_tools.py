@@ -67,6 +67,7 @@ def test_week05_mcp_stdio_server_loads_tools_and_returns_current_schedules(tmp_p
         "extract_schedules_from_history",
         "create_shared_schedule",
         "delete_shared_schedule",
+        "list_shared_schedules",
     }
     assert len(payload["rows"]) == 5
     assert {row["member_name"] for row in payload["rows"]} == {"철수", "영희"}
@@ -96,6 +97,16 @@ def test_week05_mcp_shared_schedule_tool_registers_my_schedule(tmp_path) -> None
         date_from="2026-06-12",
         date_to="2026-06-12",
     )
+    listed = json.loads(
+        week05_module.call_mcp_tool_sync(
+            "list_shared_schedules",
+            {
+                "date_from": "2026-06-12",
+                "date_to": "2026-06-12",
+            },
+            db_path=db_path,
+        )
+    )
 
     assert created["shared_schedule"]["sync_status"] == "created"
     assert rows == [
@@ -109,6 +120,19 @@ def test_week05_mcp_shared_schedule_tool_registers_my_schedule(tmp_path) -> None
             "source_conversation_id": "app:req_test",
         }
     ]
+    assert listed["rows"] == [
+        {
+            "schedule_id": "shared_test",
+            "member_name": "나",
+            "title": "개인 집중 작업",
+            "date": "2026-06-12",
+            "start_time": "10:00",
+            "end_time": "11:00",
+            "notes": "테스트 공유 일정",
+            "source_conversation_id": "app:req_test",
+        }
+    ]
+    assert "나 | 개인 집중 작업 | 2026-06-12 10:00-11:00" in listed["schedule_summary"]
 
 
 def test_week05_personal_schedule_save_syncs_to_shared_mcp_store(tmp_path, monkeypatch) -> None:

@@ -971,6 +971,51 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
             conn.execute(f"DELETE FROM external_schedules WHERE {' OR '.join(where)}", params)
         return rows
 
+    def list_shared_schedules(
+        self,
+        member_names: list[str] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        source_conversation_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """공유 일정 저장소의 row를 필터링해 조회합니다."""
+
+        where: list[str] = []
+        params: list[Any] = []
+        normalized_members = [
+            EXTERNAL_MEMBER_ALIAS.get(str(name).strip(), str(name).strip())
+            for name in (member_names or [])
+            if str(name).strip()
+        ]
+        if normalized_members:
+            placeholders = ",".join("?" for _ in normalized_members)
+            where.append(f"member_name IN ({placeholders})")
+            params.extend(normalized_members)
+
+        normalized_date_from = normalize_external_date_bound(date_from)
+        normalized_date_to = normalize_external_date_bound(date_to)
+        if normalized_date_from:
+            where.append("date >= ?")
+            params.append(normalized_date_from)
+        if normalized_date_to:
+            where.append("date <= ?")
+            params.append(normalized_date_to)
+        if source_conversation_id:
+            where.append("source_conversation_id = ?")
+            params.append(source_conversation_id)
+
+        sql = """
+            SELECT schedule_id, member_name, title, date, start_time, end_time, notes, source_conversation_id
+            FROM external_schedules
+        """
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY date, start_time, member_name LIMIT ?"
+        params.append(max(1, min(int(limit or 50), 200)))
+        with self.connect() as conn:
+            return rows_to_dicts(conn.execute(sql, params))
+
     def search_previous_conversations(
         self,
         query: str,
