@@ -15,7 +15,9 @@ Usage:
   ./run.sh --weekN --test  Run pytest + golden scenario tests for the selected week env
   ./run.sh --install       Run uv sync, then run the Week 1 Gradio app
   ./run.sh --golden        Run golden scenario tests with uv
-  ./run.sh --test          Run pytest + golden scenario tests with uv
+  ./run.sh --test          Run offline pytest + golden scenario tests with uv
+  ./run.sh --integration-test
+                           Run API-backed integration pytest tests with uv
   ./run.sh --make-student-copy [DIR]
                            Build a student distribution with reference answers stripped
   ./run.sh --conda [ARGS]  Use the legacy conda environment.yml runner
@@ -59,8 +61,11 @@ run_uv() {
       uv run python -m run_golden
       ;;
     --test)
-      uv run pytest -q
+      uv run pytest -m "not integration" -q
       uv run python -m run_golden
+      ;;
+    --integration-test)
+      uv run pytest -m integration -q
       ;;
     --make-student-copy)
       uv run python -m scripts.make_student_distribution "${2:-}"
@@ -124,8 +129,11 @@ run_conda() {
       python -m run_golden
       ;;
     --test)
-      pytest -q
+      pytest -m "not integration" -q
       python -m run_golden
+      ;;
+    --integration-test)
+      pytest -m integration -q
       ;;
     --make-student-copy)
       python -m scripts.make_student_distribution "${2:-}"

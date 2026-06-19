@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import fixed.runtime_clock as runtime_clock
 import fixed.agent_runtime as runtime_module
-import student_parts.agent_registry as agent_registry
+import fixed.week_agent_registry as agent_registry
 from fixed.agent_runtime import AgentRuntime
-from fixed.stores import AppSQLiteStore
-from student_parts.agent_registry import ActiveWeekAgentResult
+from fixed.app_store import AppSQLiteStore
+from fixed.week_agent_registry import ActiveWeekAgentResult
 from student_parts.week05_load_kanas_past_conversations import extract_schedules_from_history
 from student_parts.week06_kanamate_decides_schedule import (
     agent_tool_names,

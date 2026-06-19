@@ -125,12 +125,6 @@ def extract_schedule_request(query: str) -> str:
     )
 
 
-def extract_structured_request_with_langchain(text: str) -> StructuredRequest:
-    """기존 import 호환을 위한 별칭입니다. 2주차는 항상 LLM structured output을 사용합니다."""
-
-    return extract_structured_request(text)
-
-
 def week02_tools() -> list[Any]:
     """1주차 도구에 2주차 structured output 도구를 누적한 목록입니다."""
 

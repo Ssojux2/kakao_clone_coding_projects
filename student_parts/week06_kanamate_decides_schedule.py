@@ -1,20 +1,24 @@
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
 from typing import Any
 
 from langchain.agents import create_agent
 from langchain.tools import tool
 
 from fixed.config import CONFIG
+from fixed.external_people_store import normalize_external_member_names
+from fixed.langchain_trace import extract_agent_events, extract_final_text
 from fixed.llm import chat_model
 from fixed.runtime_clock import current_app_date_iso
+from fixed.schedule_decision import (
+    decide_final_slot_payload,
+    find_common_available_slots_payload,
+    normalize_date_bound,
+)
 from golden_cases import harness_prompt_examples
 from student_parts.week01_wake_up_nana import (
     ensure_demo_personal_schedule,
-    extract_agent_events,
-    extract_final_text,
     list_personal_schedule_dicts,
     personal_create_schedule,
     personal_delete_schedule,
@@ -32,7 +36,6 @@ from student_parts.week03_build_nanas_logbook import (
 from student_parts import week03_build_nanas_logbook as week03_store
 from student_parts.week04_retrieve_nanas_memory import week04_tools
 from student_parts.week05_load_kanas_past_conversations import (
-    _normalize_members,
     collect_member_schedules,
     extract_schedules_from_history,
     list_shared_schedules,
@@ -61,18 +64,18 @@ _SUPERVISOR_AGENT: Any | None = None
 #      - 후보 계산을 수행한 경우 members, busy_rows, candidate_slots도 함께 남겨 근거를 확인할 수 있게 합니다.
 #
 #   2. nana_agent
-#      - supervisor가 넘긴 query를 build_nana_subagent().invoke(...)로 실행합니다.
+#      - supervisor가 넘긴 query로 Nana 하위 agent를 이 tool 안에서 만들거나 재사용해 실행합니다.
 #      - 하위 agent 결과에서 answer, trace, inner_tool_names를 뽑아 JSON 문자열로 반환합니다.
 #      - PROXY_TOKEN이 없으면 예외 대신 ok=False 실패 payload를 반환해 실습 화면이 깨지지 않게 합니다.
 #
 #   3. kana_agent
-#      - supervisor가 넘긴 query를 build_kana_subagent().invoke(...)로 실행합니다.
+#      - supervisor가 넘긴 query로 Kana 하위 agent를 이 tool 안에서 만들거나 재사용해 실행합니다.
 #      - 하위 trace를 훑어 decide_final_slot 결과를 final_slot_payload로 끌어올립니다.
 #      - answer, trace, inner_tool_names, final_slot_payload, final_decision_payload를 JSON으로 반환합니다.
 #
 # 중요한 구조
 #   Week 6 파일은 Week 1-5 구현을 다시 작성하지 않습니다.
-#   이전 주차 tool을 import하고 nana_tools(), kana_tools(), supervisor_tools()에서 역할별로 조립합니다.
+#   이전 주차 tool을 import하고 kana_tools(), supervisor_tools()에서 역할별로 조립합니다.
 #   prompt 함수와 busy-time 계산 helper는 구현 대상이 아니라 agent 역할과 데이터 흐름을 이해하는 참고 코드입니다.
 #
 # Compatibility helper
@@ -102,12 +105,6 @@ def personal_delete_schedule_by_query(query: str) -> str:
     """일정 ID가 없어도 사용자 프롬프트의 날짜, 시간, 제목 단서로 개인 일정을 찾아 삭제합니다."""
 
     return json.dumps(delete_schedule_by_query_dict(query), ensure_ascii=False)
-
-
-def _chat_model() -> object:
-    if not CONFIG.has_openai_key:
-        raise RuntimeError("PROXY_TOKEN이 .env에 필요합니다.")
-    return chat_model()
 
 
 def _harness_examples_text() -> str:
@@ -265,49 +262,6 @@ def extract_schedule_request(query: str) -> str:
     )
 
 
-def _parse_time_minutes(value: str | None, fallback: int) -> int:
-    if not value or value == "미정":
-        return fallback
-    try:
-        hour_text, minute_text = value.split(":", 1)
-        return int(hour_text) * 60 + int(minute_text)
-    except (AttributeError, ValueError):
-        return fallback
-
-
-def _format_time_minutes(minutes: int) -> str:
-    return f"{minutes // 60:02d}:{minutes % 60:02d}"
-
-
-def _normalize_date_bound(value: str) -> str:
-    return str(value).split("T", 1)[0].strip()
-
-
-def _date_range(date_from: str, date_to: str) -> list[str]:
-    start = date.fromisoformat(_normalize_date_bound(date_from))
-    end = date.fromisoformat(_normalize_date_bound(date_to))
-    if end < start:
-        start, end = end, start
-    days: list[str] = []
-    current = start
-    while current <= end:
-        days.append(current.isoformat())
-        current += timedelta(days=1)
-    return days
-
-
-def _busy_rows_overlap(rows: list[dict[str, Any]], day: str, start_minutes: int, end_minutes: int) -> list[dict[str, Any]]:
-    blockers: list[dict[str, Any]] = []
-    for row in rows:
-        if row.get("date") != day:
-            continue
-        busy_start = _parse_time_minutes(row.get("start_time"), 0)
-        busy_end = _parse_time_minutes(row.get("end_time"), 24 * 60)
-        if start_minutes < busy_end and busy_start < end_minutes:
-            blockers.append(row)
-    return blockers
-
-
 def find_common_available_slots_dict(
     member_names: list[str],
     date_from: str,
@@ -319,9 +273,9 @@ def find_common_available_slots_dict(
 ) -> dict[str, Any]:
     """멤버별 busy-time rows를 공통 가능 시간 후보로 바꿉니다."""
 
-    normalized_members = _normalize_members(member_names)
-    normalized_date_from = _normalize_date_bound(date_from)
-    normalized_date_to = _normalize_date_bound(date_to)
+    normalized_members = normalize_external_member_names(member_names)
+    normalized_date_from = normalize_date_bound(date_from)
+    normalized_date_to = normalize_date_bound(date_to)
     collected = json.loads(
         collect_member_schedules.invoke(
             {
@@ -332,44 +286,16 @@ def find_common_available_slots_dict(
         )
     )
     rows = collected.get("rows", [])
-    start_minutes = _parse_time_minutes(workday_start, 9 * 60)
-    end_minutes = _parse_time_minutes(workday_end, 18 * 60)
-    duration = max(30, min(int(duration_minutes or 60), end_minutes - start_minutes))
-    step = 30
-
-    candidate_slots: list[dict[str, Any]] = []
-    for day in _date_range(normalized_date_from, normalized_date_to):
-        cursor = start_minutes
-        while cursor + duration <= end_minutes:
-            slot_end = cursor + duration
-            blockers = _busy_rows_overlap(rows, day, cursor, slot_end)
-            if not blockers:
-                candidate_slots.append(
-                    {
-                        "date": day,
-                        "start_time": _format_time_minutes(cursor),
-                        "end_time": _format_time_minutes(slot_end),
-                        "duration_minutes": duration,
-                        "reason": "수집된 busy-time과 겹치지 않는 공통 가능 시간입니다.",
-                    }
-                )
-                if len(candidate_slots) >= limit:
-                    return {
-                        "ok": True,
-                        "tool_name": "find_common_available_slots",
-                        "members": ["나", *normalized_members],
-                        "busy_rows": rows,
-                        "candidate_slots": candidate_slots,
-                    }
-            cursor += step
-
-    return {
-        "ok": True,
-        "tool_name": "find_common_available_slots",
-        "members": ["나", *normalized_members],
-        "busy_rows": rows,
-        "candidate_slots": candidate_slots,
-    }
+    return find_common_available_slots_payload(
+        member_names=["나", *normalized_members],
+        date_from=normalized_date_from,
+        date_to=normalized_date_to,
+        busy_rows=rows,
+        duration_minutes=duration_minutes,
+        workday_start=workday_start,
+        workday_end=workday_end,
+        limit=limit,
+    )
 
 
 @tool
@@ -398,64 +324,6 @@ def find_common_available_slots(
     )
 
 
-def _slot_to_text(slot: Any) -> str:
-    if isinstance(slot, str):
-        return slot
-    if not isinstance(slot, dict):
-        return str(slot)
-    date_text = slot.get("date") or "날짜 미정"
-    start_time = slot.get("start_time") or "시간 미정"
-    end_time = slot.get("end_time")
-    return f"{date_text} {start_time}-{end_time}" if end_time else f"{date_text} {start_time}"
-
-
-def decide_final_slot_dict(
-    candidate_slots: list[Any] | None = None,
-    member_names: list[str] | None = None,
-    date_from: str | None = None,
-    date_to: str | None = None,
-    duration_minutes: int = 60,
-    reason: str | None = None,
-) -> dict[str, Any]:
-    """Course repo 기준 final_slot payload를 만들되 기존 후보 계산 기능을 재사용합니다."""
-
-    slots = list(candidate_slots or [])
-    computed: dict[str, Any] | None = None
-    if not slots and member_names and date_from and date_to:
-        computed = find_common_available_slots_dict(
-            member_names=member_names,
-            date_from=date_from,
-            date_to=date_to,
-            duration_minutes=duration_minutes,
-            limit=5,
-        )
-        slots = list(computed.get("candidate_slots") or [])
-
-    selected = slots[0] if slots else None
-    candidates = [_slot_to_text(slot) for slot in slots]
-    final_slot = _slot_to_text(selected) if selected else None
-    if reason:
-        final_reason = reason
-    elif isinstance(selected, dict) and selected.get("reason"):
-        final_reason = str(selected["reason"])
-    elif selected:
-        final_reason = "내 개인 일정과 팀원 가능 시간이 모두 충돌하지 않는 첫 후보입니다."
-    else:
-        final_reason = "공통 가능 시간을 찾지 못했습니다."
-    payload: dict[str, Any] = {
-        "final_slot": final_slot,
-        "reason": final_reason,
-        "candidates": candidates,
-    }
-    if computed:
-        payload["members"] = computed.get("members")
-        payload["busy_rows"] = computed.get("busy_rows", [])
-        payload["candidate_slots"] = computed.get("candidate_slots", [])
-    elif slots and any(isinstance(slot, dict) for slot in slots):
-        payload["candidate_slots"] = slots
-    return payload
-
-
 @tool
 def decide_final_slot(
     candidate_slots: list[Any] | None = None,
@@ -468,20 +336,17 @@ def decide_final_slot(
     """내 일정과 팀원 가능 시간을 비교해 최종 회의 시간을 결정합니다."""
 
     return json.dumps(
-        decide_final_slot_dict(
+        decide_final_slot_payload(
             candidate_slots=candidate_slots,
             member_names=member_names,
             date_from=date_from,
             date_to=date_to,
             duration_minutes=duration_minutes,
             reason=reason,
+            slot_finder=find_common_available_slots_dict,
         ),
         ensure_ascii=False,
     )
-
-
-def nana_tools() -> list[Any]:
-    return week04_tools()
 
 
 def kana_tools() -> list[Any]:
@@ -502,38 +367,12 @@ def supervisor_tools() -> list[Any]:
 
 def agent_tool_names(agent_name: str) -> list[str]:
     if agent_name == "nana_agent":
-        return [tool_name(item) for item in nana_tools()]
+        return [tool_name(item) for item in week04_tools()]
     if agent_name == "kana_agent":
         return [tool_name(item) for item in kana_tools()]
     if agent_name == "supervisor":
         return [tool_name(item) for item in supervisor_tools()]
     return []
-
-
-def build_nana_subagent() -> object:
-    """개인 일정과 RAG 작업을 처리하는 프롬프트 기반 Nana 하위 에이전트를 만듭니다."""
-
-    global _NANA_SUBAGENT
-    if _NANA_SUBAGENT is None:
-        _NANA_SUBAGENT = create_agent(
-            model=_chat_model(),
-            tools=nana_tools(),
-            system_prompt=nana_system_prompt(),
-        )
-    return _NANA_SUBAGENT
-
-
-def build_kana_subagent() -> object:
-    """그룹 일정 조율을 처리하는 프롬프트 기반 Kana 하위 에이전트를 만듭니다."""
-
-    global _KANA_SUBAGENT
-    if _KANA_SUBAGENT is None:
-        _KANA_SUBAGENT = create_agent(
-            model=_chat_model(),
-            tools=kana_tools(),
-            system_prompt=kana_system_prompt(),
-        )
-    return _KANA_SUBAGENT
 
 
 @tool
@@ -550,7 +389,7 @@ def propose_group_schedule(
     selected = selected_slot or (slots[0] if slots else None)
     payload = {
         "title": title,
-        "members": _normalize_members(member_names),
+        "members": normalize_external_member_names(member_names),
         "selected_slot": selected,
         "status": "confirmed" if selected else "needs_manual_review",
         "reason": reason or (selected.get("reason") if selected else "공통 가능 시간을 찾지 못했습니다."),
@@ -575,7 +414,14 @@ def nana_agent(query: str) -> str:
             },
             ensure_ascii=False,
         )
-    result = build_nana_subagent().invoke({"messages": [{"role": "user", "content": query}]})
+    global _NANA_SUBAGENT
+    if _NANA_SUBAGENT is None:
+        _NANA_SUBAGENT = create_agent(
+            model=chat_model(),
+            tools=week04_tools(),
+            system_prompt=nana_system_prompt(),
+        )
+    result = _NANA_SUBAGENT.invoke({"messages": [{"role": "user", "content": query}]})
     trace = extract_agent_events(result)
     return json.dumps(
         {
@@ -609,7 +455,14 @@ def kana_agent(query: str) -> str:
             },
             ensure_ascii=False,
         )
-    result = build_kana_subagent().invoke({"messages": [{"role": "user", "content": query}]})
+    global _KANA_SUBAGENT
+    if _KANA_SUBAGENT is None:
+        _KANA_SUBAGENT = create_agent(
+            model=chat_model(),
+            tools=kana_tools(),
+            system_prompt=kana_system_prompt(),
+        )
+    result = _KANA_SUBAGENT.invoke({"messages": [{"role": "user", "content": query}]})
     trace = extract_agent_events(result)
     final_slot = None
     final_decision = None
@@ -642,26 +495,14 @@ def build_langchain_supervisor_agent() -> object:
     global _SUPERVISOR_AGENT
     if _SUPERVISOR_AGENT is None:
         _SUPERVISOR_AGENT = create_agent(
-            model=_chat_model(),
+            model=chat_model(),
             tools=supervisor_tools(),
             system_prompt=supervisor_system_prompt(),
         )
     return _SUPERVISOR_AGENT
 
 
-def week06_system_prompt() -> str:
-    """6주차 active-week agent가 따르는 supervisor 시스템 프롬프트입니다."""
-
-    return supervisor_system_prompt()
-
-
-def build_week06_agent() -> object:
-    """Week 6 supervisor agent를 만듭니다."""
-
-    return build_langchain_supervisor_agent()
-
-
 def build_week_agent() -> object:
     """active-week registry가 호출하는 표준 Week agent builder입니다."""
 
-    return build_week06_agent()
+    return build_langchain_supervisor_agent()

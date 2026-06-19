@@ -23,3 +23,8 @@ dev = [
 
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that call real model, embedding, Chroma, or external service paths",
+]

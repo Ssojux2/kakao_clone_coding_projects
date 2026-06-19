@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 import student_parts.week02_structure_natural_language_requests as week02_module
 from fixed.config import CONFIG
 
 
+@pytest.mark.integration
 def test_week02_extract_schedule_request_uses_real_openai_structured_output() -> None:
     assert CONFIG.has_openai_key, "Week 2는 실제 structured output 호출이 필요합니다. .env에 PROXY_TOKEN을 설정하세요."
 

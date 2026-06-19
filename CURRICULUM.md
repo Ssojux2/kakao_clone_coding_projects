@@ -2,7 +2,7 @@
 
 이 문서는 Kanana Schedule Agent 수업에서 다루는 Week별 미션을 정리한 강사용 운영안입니다. 미션은 현재 `student_parts/weekXX_*.py` 코드에 실제로 들어 있는 prompt, 도구, 데이터 흐름만 기준으로 작성합니다. LLM과 Agent를 공부하는 학생들이 각 기능을 작은 단위로 따라가며 확인하도록 설계합니다.
 
-앱 실행은 기본적으로 Week 1 agent를 사용합니다. 수업 주차별 앱 확인은 `./run.sh --week1`부터 `./run.sh --week6`까지 active week를 명시해 진행합니다. `fixed/agent_runtime.py`는 UI 입력과 대화 저장만 담당하고, 선택된 주차의 `build_week_agent()`를 `student_parts.agent_registry`가 동적으로 import해 실행합니다.
+앱 실행은 기본적으로 Week 1 agent를 사용합니다. 수업 주차별 앱 확인은 `./run.sh --week1`부터 `./run.sh --week6`까지 active week를 명시해 진행합니다. `fixed/agent_runtime.py`는 UI 입력과 대화 저장만 담당하고, 선택된 주차의 `build_week_agent()`를 `fixed.week_agent_registry`가 동적으로 import해 실행합니다.
 
 ## 운영 기준
 
@@ -10,7 +10,7 @@
 - 운영 시간: 주차당 2회, 회당 150분
 - 수업 방식: 핵심 개념 확인, 기준 코드 따라가기, 입력값 바꿔 실험하기, 결과 확인하기
 - 미션 방식: 각 Week 코드가 공개하는 prompt, tool, payload, 저장소, trace 흐름을 읽고 실행 결과로 검증하기
-- 학생 직접 구현 범위: 각 `student_parts/weekXX_*.py` 최상단 `[수강생 구현 가이드]`가 지정한 핵심 `@tool` 함수만 구현합니다. prompt, schema, helper, tool-list, agent builder, MCP server 함수는 연결 구조를 읽는 참고 코드로 둡니다.
+- 학생 직접 구현 범위: 각 `student_parts/weekXX_*.py` 최상단 `[수강생 구현 가이드]`가 지정한 핵심 `@tool` 함수만 구현합니다. 학생은 TODO tool 본문 안에서 입력 정리, 저장소/MCP 호출, JSON 반환까지 완성하며 별도 helper 계층을 따라 구현하지 않아도 됩니다. prompt, schema, tool-list, agent builder, MCP server 함수는 연결 구조를 읽는 참고 코드로 둡니다.
 
 ## Week 1 · week01_wake_up_nana.py
 
@@ -54,7 +54,7 @@
 
 `add_personal_reference`는 개인 참고자료를 추가할 때만 사용합니다. 기존 통합 검색 `search_nana_memory`는 앱 compatibility helper로 남겨 두지만, course repo 기준 agent prompt와 golden harness는 `search_personal_references`, `search_saved_requests`를 우선합니다.
 
-구현 순서는 단순하게 유지합니다. 먼저 ChromaDB 개인 참고자료 검색 결과를 `hits` 배열로 바꾸고, 그 다음 SQLite 저장 요청 검색 결과를 `rows` 배열로 바꿉니다. `fixed/stores.py`는 테이블 구조와 저장소 API를 이해하기 위한 참고 파일이며, Week 4 실습 구현은 `student_parts/week04_retrieve_nanas_memory.py` 안에서 진행합니다.
+구현 순서는 단순하게 유지합니다. 먼저 ChromaDB 개인 참고자료 검색 결과를 `hits` 배열로 바꾸고, 그 다음 SQLite 저장 요청 검색 결과를 `rows` 배열로 바꿉니다. 저장소 구현은 역할별로 `fixed/app_store.py`, `fixed/external_people_store.py`, `fixed/reference_store.py`에 나뉘어 있으며, Week 4 실습 구현은 `student_parts/week04_retrieve_nanas_memory.py` 안에서 진행합니다.
 
 실습 전 `.env`에 실제 `PROXY_TOKEN`이 필요합니다. 개인 참고자료 검색은 `EMBEDDING_PROXY_URL`의 OpenAI 호환 embedding API를 사용하며, 모델명은 `OPENAI_EMBEDDING_MODEL` 값으로 정합니다. compatibility helper인 `search_nana_memory`의 `reference_backend` 필드에서 `vector_store=chromadb`, `embedding_provider=openai`를 확인할 수 있습니다.
 
@@ -96,13 +96,13 @@
 ## 검증 기준
 
 - Week 1-2도 채팅 런타임 trace에서 LLM이 고른 tool과 JSON payload 모양을 먼저 확인합니다.
-- Week 3 이후는 `./run.sh --test`를 자동 검증 기준으로 사용합니다.
+- Week 3 이후는 API key 없이 통과하는 `./run.sh --test`를 기본 자동 검증 기준으로 사용합니다.
 - Week 6 마지막에는 `./run.sh --golden`으로 전체 scenario가 깨지지 않았는지 확인합니다.
 
 ## 강사용 준비물
 
 - 강사용 기준본은 실제 OpenAI/SQLite/ChromaDB 경로가 동작하는 완성본으로 유지하고, 학생용 배포본은 `./run.sh --make-student-copy`로 생성합니다.
-- 학생용 배포본에서는 `student_parts/`의 주차별 핵심 `@tool` 함수 구현부만 `NotImplementedError` TODO로 바뀝니다.
-- 수업 전 `./run.sh --test`로 기준본이 통과하는지 확인합니다.
-- Week 2와 Week 4 검증은 프록시 서버를 통해 실제 모델 API를 호출하므로 수업 전 `.env`의 `PROXY_TOKEN`을 확인합니다.
+- 학생용 배포본에서는 `student_parts/`의 주차별 핵심 `@tool` 함수 구현부만 `NotImplementedError` TODO로 바뀌며, 각 TODO tool 본문 하나가 구현 단위가 됩니다.
+- 수업 전 `./run.sh --test`로 기준본의 오프라인 검증이 통과하는지 확인합니다.
+- Week 2와 Week 4의 실제 structured output/embedding 검증은 프록시 서버를 통해 모델 API를 호출하므로, 수업 전 `.env`의 `PROXY_TOKEN`을 확인한 뒤 `./run.sh --integration-test`를 실행합니다.
 - Week 3 이후에는 DB row가 누적될 수 있으므로 수업용 DB를 초기화하거나 복사본을 준비합니다.

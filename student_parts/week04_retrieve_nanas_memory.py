@@ -9,7 +9,15 @@ from langchain.tools import tool
 from fixed.config import CONFIG
 from fixed.llm import chat_model
 from fixed.runtime_clock import current_app_date_iso
-from fixed.stores import AppSQLiteStore, PersonalReferenceStore
+from fixed.student_api import (
+    add_personal_reference_payload,
+    json_payload,
+    safe_limit,
+    search_personal_reference_hits,
+    search_saved_request_rows,
+)
+from fixed.app_store import AppSQLiteStore
+from fixed.reference_store import PersonalReferenceStore
 from student_parts.week03_build_nanas_logbook import week03_tools
 
 
@@ -28,15 +36,17 @@ _WEEK04_AGENT: Any | None = None
 #   1. add_personal_reference
 #      - title/content/tags를 REFERENCE_STORE.add_personal_reference에 넘깁니다.
 #      - tags가 None이면 빈 list로 바꿉니다.
-#      - 반환 JSON에는 ok, tool_name, reference_backend, reference를 넣습니다.
+#      - 이 tool 안에서 reference_backend와 reference가 있는 JSON payload를 완성합니다.
 #
 #   2. search_personal_references
 #      - query와 top_k로 ChromaDB 개인 참고자료를 검색합니다.
+#      - top_k는 이 tool 안에서 안전한 범위로 정리합니다.
 #      - course repo 기준 계약에 맞게 top-level {"hits": [...]} JSON을 반환합니다.
 #      - hit에는 id, content, distance, metadata(title/tags)가 들어가야 답변 근거로 쓰기 쉽습니다.
 #
 #   3. search_saved_requests
 #      - SQLITE_STORE.search_saved_requests(query, limit)를 호출합니다.
+#      - top_k는 이 tool 안에서 안전한 범위로 정리합니다.
 #      - 검색 결과가 없으면 최근 저장 목록을 fallback으로 보여 줄 수 있습니다.
 #      - course repo 기준 계약에 맞게 top-level {"rows": [...]} JSON을 반환합니다.
 #
@@ -56,14 +66,6 @@ _WEEK04_AGENT: Any | None = None
 #   결과 JSON의 top-level 키가 각각 hits, rows인지 꼭 확인하세요.
 
 
-def _safe_limit(limit: int, default: int = 5, maximum: int = 50) -> int:
-    try:
-        value = int(limit)
-    except (TypeError, ValueError):
-        value = default
-    return max(1, min(value, maximum))
-
-
 def _decode_attendees(raw_attendees: str | None) -> list[str]:
     try:
         decoded = json.loads(raw_attendees or "[]")
@@ -72,39 +74,12 @@ def _decode_attendees(raw_attendees: str | None) -> list[str]:
     return decoded if isinstance(decoded, list) else []
 
 
-def _reference_backend_info() -> dict[str, Any]:
-    return REFERENCE_STORE.backend_info()
-
-
-def _course_reference_hits(query: str, top_k: int) -> list[dict[str, Any]]:
-    hits = REFERENCE_STORE.search_personal_references(query=query, limit=_safe_limit(top_k, default=2, maximum=20))
-    return [
-        {
-            "id": hit.get("id"),
-            "content": hit.get("content"),
-            "distance": hit.get("distance"),
-            "metadata": {
-                "title": hit.get("title", ""),
-                "tags": hit.get("tags", ""),
-            },
-        }
-        for hit in hits
-    ]
-
-
 @tool
 def add_personal_reference(title: str, content: str, tags: list[str] | None = None) -> str:
     """개인 참고자료를 ChromaDB에 추가합니다."""
 
-    item = REFERENCE_STORE.add_personal_reference(title=title, content=content, tags=tags or [])
-    return json.dumps(
-        {
-            "ok": True,
-            "tool_name": "add_personal_reference",
-            "reference_backend": _reference_backend_info(),
-            "reference": item,
-        },
-        ensure_ascii=False,
+    return json_payload(
+        add_personal_reference_payload(REFERENCE_STORE, title=title, content=content, tags=tags)
     )
 
 
@@ -112,18 +87,14 @@ def add_personal_reference(title: str, content: str, tags: list[str] | None = No
 def search_personal_references(query: str, top_k: int = 2) -> str:
     """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
 
-    return json.dumps({"hits": _course_reference_hits(query=query, top_k=top_k)}, ensure_ascii=False)
+    return json_payload({"hits": search_personal_reference_hits(REFERENCE_STORE, query=query, top_k=top_k)})
 
 
 @tool
 def search_saved_requests(query: str, top_k: int = 3) -> str:
     """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다."""
 
-    limit = _safe_limit(top_k, default=3, maximum=50)
-    rows = SQLITE_STORE.search_saved_requests(query=query, limit=limit)
-    if not rows:
-        rows = SQLITE_STORE.list_saved_requests(limit=limit)
-    return json.dumps({"rows": rows}, ensure_ascii=False)
+    return json_payload({"rows": search_saved_request_rows(SQLITE_STORE, query=query, top_k=top_k)})
 
 
 @tool
@@ -136,7 +107,7 @@ def search_nana_memory(
 ) -> str:
     """개인 참고자료와 SQLite 저장 일정을 한 번에 검색하고 일정 chunk를 반환합니다."""
 
-    normalized_limit = _safe_limit(limit, default=5, maximum=20)
+    normalized_limit = safe_limit(limit, default=5, maximum=20)
     reference_hits = REFERENCE_STORE.search_personal_references(query=query, limit=min(normalized_limit, 5))
 
     clauses: list[str] = []
@@ -214,34 +185,13 @@ def search_nana_memory(
         {
             "ok": True,
             "tool_name": "search_nana_memory",
-            "reference_backend": _reference_backend_info(),
+            "reference_backend": REFERENCE_STORE.backend_info(),
             "reference_hits": reference_hits,
             "schedule_chunks": schedule_chunks,
             "context": context,
         },
         ensure_ascii=False,
     )
-
-
-def search_nana_memory_dict(
-    query: str,
-    date_from: str | None = None,
-    date_to: str | None = None,
-    attendee: str | None = None,
-    limit: int = 10,
-) -> dict[str, Any]:
-    return json.loads(
-        search_nana_memory.invoke(
-            {
-                "query": query,
-                "date_from": date_from,
-                "date_to": date_to,
-                "attendee": attendee,
-                "limit": limit,
-            }
-        )
-    )
-
 
 def week04_tools() -> list[Any]:
     """3주차까지의 도구에 4주차 RAG 도구를 누적한 목록입니다."""

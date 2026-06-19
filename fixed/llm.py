@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""LangChain agent들이 공통으로 쓰는 채팅 모델 생성 모듈입니다."""
+
 from langchain_openai import ChatOpenAI
 
 from fixed.config import CONFIG

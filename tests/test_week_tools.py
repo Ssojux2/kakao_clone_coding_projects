@@ -5,13 +5,13 @@ from dataclasses import replace
 
 import fixed.runtime_clock as runtime_clock
 import student_parts.week03_build_nanas_logbook as week03_module
-from fixed.stores import AppSQLiteStore
+from fixed.app_store import AppSQLiteStore
 from golden_cases import GOLDEN_CASES, find_case_by_input, harness_prompt_examples, sample_prompts
 from student_parts.week01_wake_up_nana import PERSONAL_SCHEDULES, personal_create_schedule, week01_tools
 from student_parts.week02_structure_natural_language_requests import week02_tools
 from student_parts.week03_build_nanas_logbook import delete_saved_schedules_dict, week03_tools
 from student_parts.week04_retrieve_nanas_memory import week04_tools
-from student_parts.week05_load_kanas_past_conversations import extract_schedules_from_history_dict, week05_tools
+from student_parts.week05_load_kanas_past_conversations import extract_schedules_from_history, week05_tools
 from student_parts.week06_kanamate_decides_schedule import (
     agent_tool_names,
     find_common_available_slots_dict,
@@ -288,7 +288,11 @@ def test_delete_schedule_by_query_uses_structured_fields_without_regex(tmp_path,
 
 
 def test_week6_common_slot_calculation_uses_busy_rows() -> None:
-    external_rows = extract_schedules_from_history_dict(["철수", "영희"], "2000-01-01", "2999-12-31")
+    external_rows = json.loads(
+        extract_schedules_from_history.invoke(
+            {"member_names": ["철수", "영희"], "date_from": "2000-01-01", "date_to": "2999-12-31"}
+        )
+    )["rows"]
     target_day = external_rows[0]["date"]
 
     result = find_common_available_slots_dict(

@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 from uuid import uuid4
 
+import pytest
+
 import student_parts.week04_retrieve_nanas_memory as week04_module
 from fixed.config import CONFIG
 
 
+@pytest.mark.integration
 def test_week04_course_rag_tools_use_real_chroma_openai_and_sqlite() -> None:
     assert CONFIG.has_openai_key, "Week 4는 실제 embedding 호출이 필요합니다. .env에 PROXY_TOKEN을 설정하세요."
 

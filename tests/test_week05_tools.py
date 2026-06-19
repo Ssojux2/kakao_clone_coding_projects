@@ -6,7 +6,9 @@ import sqlite3
 
 import fixed.runtime_clock as runtime_clock
 import student_parts.week05_load_kanas_past_conversations as week05_module
-from fixed.stores import AppSQLiteStore, ExternalPeopleSQLiteStore, new_id
+from fixed.app_store import AppSQLiteStore
+from fixed.external_people_store import ExternalPeopleSQLiteStore
+from fixed.store_base import new_id
 
 
 def _mcp_text(result: object) -> str:

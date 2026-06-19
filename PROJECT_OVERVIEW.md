@@ -10,7 +10,7 @@
 | `CURRICULUM.md` | 6주 / 총 12회 수업의 주차별 미션 운영안을 정리합니다. |
 | `fixed/agent_runtime.py` | 대화 저장과 active-week student agent 호출을 담당하는 얇은 런타임입니다. |
 | `student_parts/` | 수강생이 주차별로 구현 흐름을 확인하고 수정하는 핵심 폴더입니다. |
-| `fixed/stores.py` | SQLite, 외부 대화 DB, Chroma 개인 참고자료 저장소를 제공합니다. |
+| `fixed/stores.py` | 역할별 저장소 모듈을 다시 내보내는 호환 wrapper입니다. |
 | `golden_cases.py`, `tests/`, `run_golden.py` | 프롬프트 하네스와 전체 시나리오가 기대대로 동작하는지 검증합니다. |
 | `scripts/make_student_distribution.py` | 강사용 기준본에서 학생용 TODO 배포본을 생성합니다. |
 
@@ -28,9 +28,9 @@
 | `CURRICULUM.md` | 6주 / 총 12회 수업 계획 | 각 Week의 미션, 코드 흐름, 검증 포인트를 확인합니다. | 문서 개선 시 수정 가능 |
 | `PROJECT_OVERVIEW.md` | 전체 구조와 학습 흐름 안내 | 파일 간 관계를 파악할 때 봅니다. | 문서 개선 시 수정 가능 |
 | `app.py` | Gradio UI, 채팅/상세 탭, trace 표시 | 입력이 런타임으로 들어가고 결과가 화면에 나오는 흐름을 확인합니다. | 보통 수정하지 않음 |
-| `student_parts/` | Week 1-6 수강생 구현 파일 | 학생용 배포본에서는 파일 최상단 `[수강생 구현 가이드]`를 읽고 핵심 `@tool` 함수의 `# [STUDENT TODO]`를 구현합니다. | 예 |
+| `student_parts/` | Week 1-6 수강생 구현 파일 | 학생용 배포본에서는 파일 최상단 `[수강생 구현 가이드]`를 읽고 핵심 `@tool` 함수의 `# [STUDENT TODO]` 본문만 구현합니다. TODO tool 안에서 입력 정리, 저장소/MCP 호출, JSON 반환까지 끝나도록 구성합니다. | 예 |
 | `fixed/agent_runtime.py` | active-week agent 런타임 | 채팅 입력이 선택된 주차 agent로 들어가고 trace가 수집되는 흐름을 확인합니다. | 보통 수정하지 않음 |
-| `fixed/stores.py` | SQLite/Chroma 저장소 구현 | 테이블 구조와 저장소 API를 참고합니다. Week 실습 구현은 보통 `student_parts/`에서 합니다. | 보통 수정하지 않음 |
+| `fixed/store_base.py`, `fixed/app_store.py`, `fixed/external_people_store.py`, `fixed/reference_store.py` | SQLite/Chroma 저장소 구현 | 앱 DB, 외부 멤버 DB, 개인 참고자료 저장소를 역할별로 나눠 참고합니다. `fixed/stores.py`는 기존 import 호환 wrapper입니다. | 보통 수정하지 않음 |
 | `fixed/config.py` | `.env`, DB 경로, 모델 설정 | 실행 환경 설정이 어디에서 로드되는지 확인합니다. | 필요 시 강사와 함께 수정 |
 | `fixed/trace.py` | tool call/result trace 수집 | 상세 탭에 표시되는 trace 구조를 확인합니다. | 보통 수정하지 않음 |
 | `mcp_server/` | Week 5 MCP SQLite server | 외부 대화 검색 tool이 MCP로 노출되는 방식을 봅니다. 학생 구현 대상은 아닙니다. | 보통 수정하지 않음 |
@@ -60,7 +60,7 @@
 
 1. [README.md](README.md)에서 실행 방법과 환경 변수를 확인합니다.
 2. 이 문서의 "30초 요약"과 "전체 실행 흐름"을 먼저 봅니다.
-3. `student_parts/weekXX_*.py` 파일을 열고 최상단 `[수강생 구현 가이드]`와 핵심 `@tool` 함수의 `# [STUDENT TODO]` 주석을 찾습니다.
+3. `student_parts/weekXX_*.py` 파일을 열고 최상단 `[수강생 구현 가이드]`와 핵심 `@tool` 함수의 `# [STUDENT TODO]` 주석을 찾습니다. 구현은 해당 TODO tool 본문 하나 안에서 완료합니다.
 4. `./run.sh --week1`로 시작하고, 주차가 올라가면 `./run.sh --week2`처럼 선택합니다.
 5. `./run.sh --test` 또는 `./run.sh --golden`으로 전체 기준본이 통과하는지 확인합니다.
 6. 앱을 실행한 뒤 "상세" 탭에서 마지막 Agent 실행 trace를 확인합니다.
@@ -85,7 +85,13 @@ Week 1 Gradio 앱을 실행합니다.
 ./run.sh --test
 ```
 
-pytest 단위 테스트를 실행한 뒤 golden scenario를 이어서 확인합니다.
+API key 없이 통과해야 하는 오프라인 pytest를 실행한 뒤 golden scenario를 이어서 확인합니다.
+
+```bash
+./run.sh --integration-test
+```
+
+실제 `PROXY_TOKEN`이 있을 때 Week 2 structured output과 Week 4 embedding/RAG 통합 테스트를 실행합니다.
 
 ```bash
 ./run.sh --golden

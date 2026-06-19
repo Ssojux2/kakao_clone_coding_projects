@@ -1,30 +1,28 @@
 from __future__ import annotations
 
-import asyncio
-import json
-import os
-import sys
-from pathlib import Path
-from threading import Thread
 from typing import Any
 
 from langchain.agents import create_agent
 from langchain.tools import tool
 
-from fixed.config import CONFIG, PACKAGE_ROOT
+from fixed.config import CONFIG
+from fixed.external_mcp import call_external_tool_payload
 from fixed.llm import chat_model
-from fixed.runtime_clock import current_app_date_iso
-from fixed.stores import (
-    ExternalPeopleSQLiteStore,
-    external_schedule_summary,
-    normalize_external_member_names,
-    normalize_external_schedule_date_bounds,
+from fixed.mcp_client import (
+    call_local_mcp_tool,
+    call_local_mcp_tool_sync,
+    load_local_mcp_tools,
+    load_local_mcp_tools_sync,
 )
-from student_parts.week01_wake_up_nana import ensure_demo_personal_schedule, list_personal_schedule_dicts
+from fixed.runtime_clock import current_app_date_iso
+from fixed.student_api import (
+    collect_member_schedules_payload,
+    json_payload,
+)
+from student_parts.week01_wake_up_nana import PERSONAL_SCHEDULES, ensure_demo_personal_schedule
 from student_parts.week04_retrieve_nanas_memory import week04_tools
 
 
-EXTERNAL_STORE = ExternalPeopleSQLiteStore(CONFIG.external_db_path)
 _WEEK05_AGENT: Any | None = None
 
 
@@ -37,16 +35,16 @@ _WEEK05_AGENT: Any | None = None
 # 구현 대상
 #   1. search_previous_conversations
 #      - query, member_names, limit를 받습니다.
-#      - member_names가 있으면 normalize_external_member_names로 외부 DB 기준 이름으로 맞춥니다.
 #      - call_mcp_tool_sync("search_previous_conversations", args)를 호출하고 결과 문자열을 그대로 반환합니다.
+#      - 멤버 이름 정규화는 외부 SQLite store/MCP 경계에서 한 번만 처리합니다.
 #
 #   2. load_conversation_messages
-#      - conversation_id를 MCP load_conversation_messages tool에 넘깁니다.
+#      - conversation_id로 외부 SQLite/MCP helper에서 이전 대화 메시지를 조회합니다.
 #      - 대화 메시지의 speaker/content/created_at 순서가 보존되도록 결과를 가공하지 않습니다.
 #
 #   3. extract_schedules_from_history
 #      - member_names, date_from, date_to를 받습니다.
-#      - 이름과 날짜 범위를 수업용 fixture 기준으로 정규화한 뒤 MCP tool에 넘깁니다.
+#      - 수업용 fixture 날짜 범위 보정은 외부 SQLite store/MCP 경계에서 한 번만 처리합니다.
 #      - 결과 rows는 member_name/title/date/start_time/end_time/notes 필드를 유지해야 합니다.
 #
 #   4. create_shared_schedule / delete_shared_schedule / list_shared_schedules
@@ -55,14 +53,14 @@ _WEEK05_AGENT: Any | None = None
 #      - 공유 저장소 자체를 확인할 때는 list_shared_schedules로 "나"를 포함한 등록 row를 조회합니다.
 #
 #   5. collect_member_schedules
-#      - 내 일정은 list_personal_schedule_dicts에서 가져옵니다.
-#      - 외부 멤버 일정은 extract_schedules_from_history_dict에서 가져옵니다.
-#      - 두 출처를 member_name/title/date/start_time/end_time/notes가 있는 같은 rows 배열로 합칩니다.
+#      - 내 일정은 PERSONAL_SCHEDULES를 이 tool 안에서 날짜 범위로 필터링합니다.
+#      - 외부 멤버 일정은 MCP extract_schedules_from_history 결과를 이 tool 안에서 읽습니다.
+#      - 두 출처를 member_name/title/date/start_time/end_time/notes가 있는 rows 배열로 직접 합칩니다.
 #      - schedule_summary도 함께 반환해 LLM이 바쁜 시간을 자연어로 설명할 수 있게 합니다.
 #
 # 책임 경계
 #   mcp_server/sqlite_mcp_server.py의 @mcp.tool 구현은 학생 구현 대상이 아닙니다.
-#   이 파일의 wrapper tool은 직접 SQL을 작성하지 않고 call_mcp_tool_sync로 MCP 결과 JSON을 전달합니다.
+#   이 파일의 wrapper tool은 직접 SQL이나 중복 정규화 helper를 두지 않고 store/MCP helper의 결과 JSON을 전달합니다.
 #   week05_tools()는 Week 1-4 도구에 외부 SQLite/MCP 일정 도구를 누적합니다.
 #
 # 검증 방법
@@ -72,60 +70,10 @@ _WEEK05_AGENT: Any | None = None
 #   collect_member_schedules 결과 rows에 "나"와 외부 멤버 일정이 같은 구조로 들어 있는지도 확인합니다.
 
 
-def _normalize_members(member_names: list[str]) -> list[str]:
-    return normalize_external_member_names(member_names)
-
-
-def _mcp_result_to_text(result: Any) -> str:
-    if isinstance(result, str):
-        return result
-    if isinstance(result, list):
-        parts: list[str] = []
-        for item in result:
-            if isinstance(item, dict):
-                text = item.get("text") or item.get("content")
-                if text:
-                    parts.append(str(text))
-            elif item is not None:
-                parts.append(str(item))
-        if parts:
-            return "\n".join(parts)
-    return json.dumps(result, ensure_ascii=False)
-
-
-def _run_coroutine_sync(coro: Any) -> Any:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-
-    result: list[Any] = []
-    errors: list[BaseException] = []
-
-    def runner() -> None:
-        try:
-            result.append(asyncio.run(coro))
-        except BaseException as exc:
-            errors.append(exc)
-
-    thread = Thread(target=runner, daemon=True)
-    thread.start()
-    thread.join()
-    if errors:
-        raise errors[0]
-    return result[0]
-
-
-async def call_mcp_tool(tool_name: str, args: dict[str, Any], db_path: str | Path | None = None) -> str:
-    tools = {item.name: item for item in await load_langchain_mcp_tools(db_path=db_path)}
-    if tool_name not in tools:
-        available = ", ".join(sorted(tools))
-        raise ValueError(f"Unknown MCP tool {tool_name!r}. Available tools: {available}")
-    return _mcp_result_to_text(await tools[tool_name].ainvoke(args))
-
-
-def call_mcp_tool_sync(tool_name: str, args: dict[str, Any], db_path: str | Path | None = None) -> str:
-    return _run_coroutine_sync(call_mcp_tool(tool_name=tool_name, args=args, db_path=db_path))
+call_mcp_tool = call_local_mcp_tool
+call_mcp_tool_sync = call_local_mcp_tool_sync
+load_langchain_mcp_tools = load_local_mcp_tools
+load_langchain_mcp_tools_sync = load_local_mcp_tools_sync
 
 
 @tool
@@ -136,10 +84,9 @@ def search_previous_conversations(
 ) -> str:
     """외부 SQLite 데이터베이스에 저장된 이전 대화를 검색합니다."""
 
-    normalized_members = normalize_external_member_names(member_names) if member_names is not None else None
     return call_mcp_tool_sync(
         "search_previous_conversations",
-        {"query": query, "member_names": normalized_members, "limit": limit},
+        {"query": query, "member_names": member_names, "limit": limit},
     )
 
 
@@ -147,24 +94,21 @@ def search_previous_conversations(
 def load_conversation_messages(conversation_id: str) -> str:
     """외부 SQLite 데이터베이스에서 특정 이전 대화의 모든 메시지를 불러옵니다."""
 
-    return call_mcp_tool_sync("load_conversation_messages", {"conversation_id": conversation_id})
+    return json_payload(
+        call_external_tool_payload("load_conversation_messages", {"conversation_id": conversation_id})
+    )
 
 
 @tool
 def extract_schedules_from_history(member_names: list[str], date_from: str, date_to: str) -> str:
     """외부 SQLite 이전 대화에서 멤버별 일정을 추출합니다."""
 
-    normalized_date_from, normalized_date_to = normalize_external_schedule_date_bounds(
-        member_names,
-        date_from,
-        date_to,
-    )
     return call_mcp_tool_sync(
         "extract_schedules_from_history",
         {
-            "member_names": _normalize_members(member_names),
-            "date_from": normalized_date_from,
-            "date_to": normalized_date_to,
+            "member_names": member_names,
+            "date_from": date_from,
+            "date_to": date_to,
         },
     )
 
@@ -240,82 +184,14 @@ def collect_member_schedules(member_names: list[str], date_from: str, date_to: s
     """내 일정과 다른 사람들의 일정을 MCP SQLite 기록에서 모읍니다."""
 
     ensure_demo_personal_schedule()
-    normalized_members = _normalize_members(member_names)
-    normalized_date_from, normalized_date_to = normalize_external_schedule_date_bounds(
-        normalized_members,
-        date_from,
-        date_to,
-    )
-    my_rows = [
-        {
-            "member_name": "나",
-            "title": row["title"],
-            "date": row["date"],
-            "start_time": row["start_time"],
-            "end_time": row["end_time"] if row["end_time"] != "미정" else "18:00",
-            "notes": "Nana 개인 일정",
-        }
-        for row in list_personal_schedule_dicts(date_from=normalized_date_from, date_to=normalized_date_to)
-    ]
-    external_rows = extract_schedules_from_history_dict(
-        member_names=normalized_members,
-        date_from=normalized_date_from,
-        date_to=normalized_date_to,
-    )
-    return json.dumps(
-        {
-            "ok": True,
-            "tool_name": "collect_member_schedules",
-            "members": ["나", *normalized_members],
-            "rows": [*my_rows, *external_rows],
-            "schedule_summary": external_schedule_summary([*my_rows, *external_rows]),
-        },
-        ensure_ascii=False,
-    )
-
-
-async def load_langchain_mcp_tools(db_path: str | Path | None = None) -> list[Any]:
-    """LangChain MCP 어댑터로 로컬 MCP 서버의 SQLite 도구를 불러옵니다."""
-
-    from langchain_mcp_adapters.client import MultiServerMCPClient
-
-    server_path = PACKAGE_ROOT / "mcp_server" / "sqlite_mcp_server.py"
-    env = os.environ.copy()
-    selected_db_path = db_path or env.get("KANANA_EXTERNAL_DB_PATH") or CONFIG.external_db_path
-    env["KANANA_EXTERNAL_DB_PATH"] = str(selected_db_path)
-    client = MultiServerMCPClient(
-        {
-            "kanana_sqlite": {
-                "transport": "stdio",
-                "command": sys.executable,
-                "args": [str(server_path)],
-                "env": env,
-            }
-        }
-    )
-    return await client.get_tools()
-
-
-def load_langchain_mcp_tools_sync(db_path: str | Path | None = None) -> list[Any]:
-    return _run_coroutine_sync(load_langchain_mcp_tools(db_path=db_path))
-
-
-def search_previous_conversations_dict(
-    query: str,
-    member_names: list[str] | None = None,
-    limit: int = 5,
-) -> list[dict[str, Any]]:
-    return json.loads(
-        search_previous_conversations.invoke({"query": query, "member_names": member_names, "limit": limit})
-    )["rows"]
-
-
-def extract_schedules_from_history_dict(member_names: list[str], date_from: str, date_to: str) -> list[dict[str, Any]]:
-    return json.loads(
-        extract_schedules_from_history.invoke(
-            {"member_names": member_names, "date_from": date_from, "date_to": date_to}
+    return json_payload(
+        collect_member_schedules_payload(
+            member_names=member_names,
+            date_from=date_from,
+            date_to=date_to,
+            personal_schedules=PERSONAL_SCHEDULES,
         )
-    )["rows"]
+    )
 
 
 def week05_tools() -> list[Any]:

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import app
-import student_parts.agent_registry as agent_registry
+import fixed.week_agent_registry as agent_registry
 from fixed.agent_runtime import RuntimeResult, RuntimeStreamEvent
 from langchain_core.messages import AIMessage, ToolMessage
 

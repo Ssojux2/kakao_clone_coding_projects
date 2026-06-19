@@ -46,7 +46,7 @@ KANANA_LLM_ASSIST=1
 
 ### 학생용 배포본 만들기
 
-강사용 기준본은 모든 주차가 실제로 동작하는 완성본입니다. 학생에게 나눠줄 때는 아래 명령으로 주차별 핵심 `@tool` 함수 구현부만 TODO로 바뀐 복사본을 생성합니다. 구현 방법은 각 `student_parts/weekXX_*.py` 파일 최상단의 `[수강생 구현 가이드]`를 기준으로 봅니다.
+강사용 기준본은 모든 주차가 실제로 동작하는 완성본입니다. 학생에게 나눠줄 때는 아래 명령으로 주차별 핵심 `@tool` 함수 구현부만 TODO로 바뀐 복사본을 생성합니다. 학생은 TODO tool 본문 안에서 입력 정리, 저장소/MCP 호출, JSON 반환까지 완성하면 되며 별도 helper 계층을 따라 구현하지 않아도 됩니다. 구현 방법은 각 `student_parts/weekXX_*.py` 파일 최상단의 `[수강생 구현 가이드]`를 기준으로 봅니다.
 
 ```bash
 ./run.sh --make-student-copy
@@ -111,7 +111,7 @@ conda 환경이 필요한 경우에는 기존 `environment.yml` 기반 runner를
   - `decide_final_slot`이 course repo 기준 최종 `final_slot`, `reason`, `candidates` payload를 반환합니다.
   - 기존 `find_common_available_slots`와 `propose_group_schedule`은 compatibility helper로 남겨 기능을 유지합니다.
 
-강사용 기준본은 실행 가능한 구현을 담고 있습니다. 학생용 배포본은 `scripts/make_student_distribution.py`가 주차별 핵심 `@tool` 함수 구현부만 `NotImplementedError` TODO로 바꿉니다. prompt, schema, helper, tool-list, agent builder, MCP server 함수는 연결 구조를 읽는 참고 코드로 남깁니다.
+강사용 기준본은 실행 가능한 구현을 담고 있습니다. 학생용 배포본은 `scripts/make_student_distribution.py`가 주차별 핵심 `@tool` 함수 구현부만 `NotImplementedError` TODO로 바꿉니다. prompt, schema, tool-list, agent builder, MCP server 함수는 연결 구조를 읽는 참고 코드로 남기고, 학생 구현은 TODO tool 본문 하나에서 끝나도록 유지합니다.
 
 ## 검증
 
@@ -127,9 +127,13 @@ pytest 기반 하네스 테스트까지 함께 확인하려면 아래 명령을 
 ./run.sh --test
 ```
 
-특정 주차 환경변수로 테스트하려면 `./run.sh --week6 --test`처럼 주차 인자를 앞에 붙입니다. `--test`는 pytest가 하네스 프롬프트, agent prompt/tool wiring, active-week runtime trace 형식을 확인한 뒤 golden harness 검증을 이어서 실행합니다.
+특정 주차 환경변수로 테스트하려면 `./run.sh --week6 --test`처럼 주차 인자를 앞에 붙입니다. `--test`는 API key 없이 통과해야 하는 오프라인 pytest를 실행한 뒤 golden harness 검증을 이어서 실행합니다.
 
-Week 2 structured output과 Week 4 ChromaDB reference 검색 테스트는 프록시 서버를 통해 실제 모델 API를 호출합니다. `.env`에 실제 `PROXY_TOKEN`이 없으면 해당 테스트는 실패합니다.
+Week 2 structured output과 Week 4 ChromaDB reference 검색 테스트는 프록시 서버를 통해 실제 모델 API를 호출하므로 별도 integration 테스트로 분리되어 있습니다. `.env`에 실제 `PROXY_TOKEN`이 있을 때 아래 명령으로 확인합니다.
+
+```bash
+./run.sh --integration-test
+```
 
 ## 공식 문서 기준
 

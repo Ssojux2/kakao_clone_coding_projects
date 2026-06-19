@@ -9,11 +9,21 @@ from langchain.tools import tool
 from fixed.config import CONFIG
 from fixed.llm import chat_model
 from fixed.runtime_clock import current_app_date_iso
-from fixed.stores import AppSQLiteStore
+from fixed.student_api import (
+    coerce_payload,
+    delete_schedule_by_query_payload,
+    delete_saved_schedules_payload,
+    get_saved_request_payload,
+    json_payload,
+    list_saved_requests_payload,
+    list_saved_schedules_payload,
+    save_structured_request_payload,
+    update_saved_schedule_payload,
+)
+from fixed.app_store import AppSQLiteStore
 from student_parts.week02_structure_natural_language_requests import extract_structured_request, week02_tools
 
 
-STORE = AppSQLiteStore(CONFIG.app_db_path)
 _WEEK03_AGENT: Any | None = None
 
 
@@ -25,13 +35,13 @@ _WEEK03_AGENT: Any | None = None
 #
 # 구현 대상
 #   1. save_structured_request
-#      - payload가 dict 또는 JSON 문자열로 들어올 수 있으므로 _coerce_payload로 dict로 맞춥니다.
-#      - STORE.save_structured_request(payload)를 호출합니다.
+#      - payload가 dict 또는 JSON 문자열로 들어올 수 있으므로 coerce_payload로 dict로 맞춥니다.
+#      - 저장 helper를 호출해 현재 CONFIG.app_db_path의 SQLite DB에 저장합니다.
 #      - 저장 결과의 request_id, kind, saved_rows를 ok/tool_name과 함께 JSON으로 반환합니다.
 #
 #   2. list_saved_requests / get_saved_request
-#      - list는 kind/date_from/date_to 필터를 STORE.list_saved_requests에 그대로 넘깁니다.
-#      - get은 request_id 하나로 STORE.get_saved_request를 호출합니다.
+#      - list는 kind/date_from/date_to 필터를 조회 helper에 그대로 넘깁니다.
+#      - get은 request_id 하나로 단건 조회 helper를 호출합니다.
 #      - 조회 결과가 없어도 예외를 던지지 말고 rows=[] 또는 row=None 형태를 유지합니다.
 #
 #   3. personal_list_saved_schedules
@@ -39,12 +49,12 @@ _WEEK03_AGENT: Any | None = None
 #      - 너무 많은 row가 prompt에 들어가지 않도록 limit 인자를 그대로 사용합니다.
 #
 #   4. personal_update_saved_schedule
-#      - update_saved_schedule_dict(...) helper를 호출하고 그 dict를 JSON 문자열로 감쌉니다.
+#      - AppSQLiteStore.update_schedule(...) 결과를 이 tool 안에서 JSON payload로 완성합니다.
 #      - None으로 들어온 필드는 "수정하지 않음"이라는 뜻입니다.
 #
 #   5. personal_delete_saved_schedules
 #      - schedule_ids, date, title, start_time, time_unspecified, delete_all 조건을 받습니다.
-#      - 조건 없이 삭제하지 않도록 helper의 안전 규칙을 그대로 사용합니다.
+#      - 조건 없이 삭제하지 않도록 이 tool 안에서 안전 규칙을 확인합니다.
 #      - deleted_count, filters, deleted를 유지해야 trace에서 무엇이 지워졌는지 확인할 수 있습니다.
 #
 # 반환 규칙
@@ -61,18 +71,15 @@ _WEEK03_AGENT: Any | None = None
 #   조회/수정/삭제 요청에서는 먼저 후보를 조회하고, ID 또는 필터 기반 tool로 이어지는지 확인합니다.
 
 
-def _coerce_payload(payload: dict[str, Any] | str) -> dict[str, Any]:
-    if isinstance(payload, str):
-        return json.loads(payload)
-    return payload
+def _store() -> AppSQLiteStore:
+    return AppSQLiteStore(CONFIG.app_db_path)
 
 
 @tool
 def save_structured_request(payload: dict[str, Any] | str) -> str:
     """2주차 구조화 출력 페이로드를 정규화된 SQLite 테이블에 저장합니다."""
 
-    saved = STORE.save_structured_request(_coerce_payload(payload))
-    return json.dumps({"ok": True, "tool_name": "save_structured_request", **saved}, ensure_ascii=False)
+    return json_payload(save_structured_request_payload(coerce_payload(payload), store=_store()))
 
 
 @tool
@@ -83,31 +90,23 @@ def list_saved_requests(
 ) -> str:
     """SQLite에 저장된 구조화 요청 목록을 조회합니다."""
 
-    rows = STORE.list_saved_requests(kind=kind, date_from=date_from, date_to=date_to)
-    return json.dumps({"ok": True, "tool_name": "list_saved_requests", "rows": rows}, ensure_ascii=False)
+    return json_payload(
+        list_saved_requests_payload(kind=kind, date_from=date_from, date_to=date_to, store=_store())
+    )
 
 
 @tool
 def get_saved_request(request_id: str) -> str:
     """request_id로 구조화 요청 행 하나를 조회합니다."""
 
-    row = STORE.get_saved_request(request_id)
-    return json.dumps({"ok": True, "tool_name": "get_saved_request", "row": row}, ensure_ascii=False)
+    return json_payload(get_saved_request_payload(request_id, store=_store()))
 
 
 @tool
 def personal_list_saved_schedules(limit: int = 50) -> str:
     """앱 DB에 저장된 일정 목록을 반환합니다. Nana가 삭제 후보를 직접 고를 때 사용합니다."""
 
-    store = AppSQLiteStore(CONFIG.app_db_path)
-    return json.dumps(
-        {
-            "ok": True,
-            "tool_name": "personal_list_saved_schedules",
-            "schedules": store.list_schedules(limit=limit),
-        },
-        ensure_ascii=False,
-    )
+    return json_payload(list_saved_schedules_payload(limit=limit, store=_store()))
 
 
 def delete_saved_schedules_dict(
@@ -119,85 +118,15 @@ def delete_saved_schedules_dict(
     delete_all: bool = False,
     app_store: AppSQLiteStore | None = None,
 ) -> dict[str, Any]:
-    # JSON 문자열이 아니라 dict 결과가 필요한 내부 호출과 테스트에서 재사용하는 버전입니다.
-    # tool wrapper와 같은 payload 계약을 유지하면서 입력 검증, 삭제, 결과 생성을 한곳에서 수행합니다.
-    store = app_store or AppSQLiteStore(CONFIG.app_db_path)
-    filters = {
-        "schedule_ids": schedule_ids,
-        "date": date,
-        "title": title,
-        "start_time": start_time,
-        "time_unspecified": time_unspecified,
-    }
-    has_filter = schedule_ids is not None or any([date, title, start_time, time_unspecified])
-    if not delete_all and not has_filter:
-        return {
-            "ok": False,
-            "tool_name": "personal_delete_saved_schedules",
-            "reason": "삭제할 일정 ID나 날짜/제목/시간 필터가 필요합니다.",
-            "delete_all": False,
-            "bulk_delete": False,
-            "deleted_count": 0,
-            "filters": filters,
-            "deleted": [],
-        }
-    if delete_all:
-        app_deleted = store.delete_all_schedules()
-    else:
-        app_deleted = store.delete_schedules_by_filter(
-            schedule_ids=schedule_ids,
-            date=date,
-            title=title,
-            start_time=start_time,
-            time_unspecified=time_unspecified,
-        )
-    deleted = [{"source": "app_db", "schedule": row} for row in app_deleted]
-
-    return {
-        "ok": bool(deleted),
-        "tool_name": "personal_delete_saved_schedules",
-        "delete_all": delete_all,
-        "bulk_delete": bool(not delete_all and deleted),
-        "deleted_count": len(deleted),
-        "filters": filters,
-        "deleted": deleted,
-    }
-
-
-def update_saved_schedule_dict(
-    schedule_id: str,
-    title: str | None = None,
-    date: str | None = None,
-    start_time: str | None = None,
-    end_time: str | None = None,
-    attendees: list[str] | None = None,
-    app_store: AppSQLiteStore | None = None,
-) -> dict[str, Any]:
-    store = app_store or AppSQLiteStore(CONFIG.app_db_path)
-    updated = store.update_schedule(
-        schedule_id=schedule_id,
-        title=title,
+    return delete_saved_schedules_payload(
+        schedule_ids=schedule_ids,
         date=date,
+        title=title,
         start_time=start_time,
-        end_time=end_time,
-        attendees=attendees,
+        time_unspecified=time_unspecified,
+        delete_all=delete_all,
+        store=app_store or _store(),
     )
-    if updated is None:
-        return {
-            "ok": False,
-            "tool_name": "personal_update_saved_schedule",
-            "reason": "수정할 일정 ID를 찾지 못했습니다.",
-            "schedule_id": schedule_id,
-            "updated_schedule": None,
-            "shared_sync": None,
-        }
-    return {
-        "ok": True,
-        "tool_name": "personal_update_saved_schedule",
-        "schedule_id": schedule_id,
-        "updated_schedule": updated["schedule"],
-        "shared_sync": updated["shared_sync"],
-    }
 
 
 @tool
@@ -211,16 +140,16 @@ def personal_update_saved_schedule(
 ) -> str:
     """앱 DB에 저장된 내 일정 원본을 수정하고 공유 일정 복사본을 같은 값으로 갱신합니다."""
 
-    return json.dumps(
-        update_saved_schedule_dict(
+    return json_payload(
+        update_saved_schedule_payload(
             schedule_id=schedule_id,
             title=title,
             date=date,
             start_time=start_time,
             end_time=end_time,
             attendees=attendees,
-        ),
-        ensure_ascii=False,
+            store=_store(),
+        )
     )
 
 
@@ -235,75 +164,25 @@ def personal_delete_saved_schedules(
 ) -> str:
     """Nana가 고른 일정 ID나 날짜/제목/시간 필터로 저장 일정을 삭제합니다."""
 
-    store = AppSQLiteStore(CONFIG.app_db_path)
-    filters = {
-        "schedule_ids": schedule_ids,
-        "date": date,
-        "title": title,
-        "start_time": start_time,
-        "time_unspecified": time_unspecified,
-    }
-    has_filter = schedule_ids is not None or any([date, title, start_time, time_unspecified])
-
-    if not delete_all and not has_filter:
-        return json.dumps(
-            {
-                "ok": False,
-                "tool_name": "personal_delete_saved_schedules",
-                "reason": "삭제할 일정 ID나 날짜/제목/시간 필터가 필요합니다.",
-                "delete_all": False,
-                "bulk_delete": False,
-                "deleted_count": 0,
-                "filters": filters,
-                "deleted": [],
-            },
-            ensure_ascii=False,
-        )
-
-    if delete_all:
-        deleted_rows = store.delete_all_schedules()
-    else:
-        deleted_rows = store.delete_schedules_by_filter(
+    return json_payload(
+        delete_saved_schedules_payload(
             schedule_ids=schedule_ids,
             date=date,
             title=title,
             start_time=start_time,
             time_unspecified=time_unspecified,
+            delete_all=delete_all,
+            store=_store(),
         )
-    deleted = [{"source": "app_db", "schedule": row} for row in deleted_rows]
-
-    return json.dumps(
-        {
-            "ok": bool(deleted),
-            "tool_name": "personal_delete_saved_schedules",
-            "delete_all": delete_all,
-            "bulk_delete": bool(not delete_all and deleted),
-            "deleted_count": len(deleted),
-            "filters": filters,
-            "deleted": deleted,
-        },
-        ensure_ascii=False,
     )
 
 
 def delete_schedule_by_query_dict(query: str, app_store: AppSQLiteStore | None = None) -> dict[str, Any]:
-    structured = extract_structured_request(query).model_dump()
-    title = str(structured.get("title") or "").strip()
-    filters = {
-        key: value
-        for key, value in {
-            "date": structured.get("date"),
-            "title": None if title in {"", "개인 일정", "그룹 일정", "제목 없음"} else title,
-            "start_time": structured.get("start_time"),
-        }.items()
-        if value
-    }
-    result = delete_saved_schedules_dict(app_store=app_store, **filters)
-    result["tool_name"] = "personal_delete_schedule_by_query"
-    result["structured_request"] = structured
-    if not result["ok"] and not filters:
-        result["reason"] = "삭제할 일정을 충분히 특정하지 못했습니다. 먼저 저장 일정 목록을 확인해 주세요."
-    return result
+    return delete_schedule_by_query_payload(
+        query,
+        extract_structured_request=extract_structured_request,
+        store=app_store or _store(),
+    )
 
 
 @tool
@@ -311,20 +190,6 @@ def personal_delete_schedule_by_query(query: str) -> str:
     """일정 ID가 없어도 사용자 프롬프트의 날짜, 시간, 제목 단서로 개인 일정을 찾아 삭제합니다."""
 
     return json.dumps(delete_schedule_by_query_dict(query), ensure_ascii=False)
-
-
-def save_structured_request_dict(payload: dict[str, Any]) -> dict[str, Any]:
-    return json.loads(save_structured_request.invoke({"payload": payload}))
-
-
-def list_saved_request_dicts(
-    kind: str | None = None,
-    date_from: str | None = None,
-    date_to: str | None = None,
-) -> list[dict[str, Any]]:
-    return json.loads(
-        list_saved_requests.invoke({"kind": kind, "date_from": date_from, "date_to": date_to})
-    )["rows"]
 
 
 def week03_tools() -> list[Any]:

@@ -7,9 +7,18 @@ from langchain.agents import create_agent
 from langchain.tools import tool
 
 from fixed.config import CONFIG
+from fixed.langchain_trace import (
+    extract_agent_events,
+    extract_final_text,
+    extract_langchain_trace,
+    message_content_to_text,
+    message_tool_call_names,
+    normalize_messages_value,
+    stream_chunk_messages,
+)
 from fixed.llm import chat_model
 from fixed.runtime_clock import current_app_date_iso, next_weekday_iso
-from fixed.stores import new_id, now_iso
+from fixed.store_base import new_id, now_iso
 
 
 PERSONAL_SCHEDULES: list[dict[str, Any]] = []
@@ -58,132 +67,6 @@ def _json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def message_content_to_text(message: Any) -> str:
-    """LangChain message나 dict payload에서 최종 답변 텍스트를 꺼냅니다."""
-
-    if isinstance(message, dict):
-        content = message.get("content", "")
-    else:
-        content = getattr(message, "content", message)
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                parts.append(str(item.get("text") or item.get("content") or ""))
-            else:
-                parts.append(str(item))
-        return "\n".join(part for part in parts if part).strip()
-    return str(content).strip()
-
-
-def normalize_messages_value(value: Any) -> list[Any]:
-    """LangChain stream chunk의 messages 값을 항상 list로 정규화합니다."""
-
-    if isinstance(value, list):
-        return value
-    if isinstance(value, tuple):
-        return list(value)
-    if value is None:
-        return []
-    return [value]
-
-
-def stream_chunk_messages(chunk: Any) -> list[Any]:
-    """LangChain stream update chunk에서 message 목록만 추출합니다."""
-
-    if not isinstance(chunk, dict):
-        return []
-    if "messages" in chunk:
-        return normalize_messages_value(chunk["messages"])
-
-    messages: list[Any] = []
-    for value in chunk.values():
-        if isinstance(value, dict) and "messages" in value:
-            messages.extend(normalize_messages_value(value["messages"]))
-    return messages
-
-
-def message_tool_call_names(message: Any) -> list[str]:
-    """진행 상태 표시에 사용할 tool call 이름을 추출합니다."""
-
-    tool_calls = getattr(message, "tool_calls", None) or []
-    names: list[str] = []
-    for call in tool_calls:
-        if isinstance(call, dict) and call.get("name"):
-            names.append(str(call["name"]))
-    return names
-
-
-def extract_final_text(result: dict[str, Any]) -> str:
-    """LangChain 실행 결과의 마지막 비어 있지 않은 메시지를 최종 답변으로 사용합니다."""
-
-    messages = result.get("messages", []) if isinstance(result, dict) else []
-    for message in reversed(messages):
-        text = message_content_to_text(message)
-        if text:
-            return text
-    return "응답을 생성하지 못했습니다."
-
-
-def extract_agent_events(result: dict[str, Any]) -> list[dict[str, Any]]:
-    """LangChain tool call/tool result 메시지를 trace 이벤트 배열로 변환합니다."""
-
-    events: list[dict[str, Any]] = []
-    messages = result.get("messages", []) if isinstance(result, dict) else []
-    for message in messages:
-        tool_calls = getattr(message, "tool_calls", None) or []
-        for call in tool_calls:
-            events.append(
-                {
-                    "event": "tool_call",
-                    "tool_name": call.get("name"),
-                    "arguments": call.get("args"),
-                    "id": call.get("id"),
-                }
-            )
-        if getattr(message, "type", "") == "tool":
-            content = getattr(message, "content", "")
-            parsed_content: Any = content
-            try:
-                parsed_content = json.loads(content)
-            except Exception:
-                pass
-            events.append(
-                {
-                    "event": "tool_result",
-                    "tool_name": getattr(message, "name", None),
-                    "content": parsed_content,
-                    "id": getattr(message, "tool_call_id", None),
-                }
-            )
-    return events
-
-
-def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
-    """Week 1-5가 공통으로 쓰는 기본 trace payload를 만듭니다."""
-
-    return {"events": extract_agent_events(result)}
-
-
-def _schedule_structured_request(schedule: dict[str, Any]) -> dict[str, Any]:
-    """일정 정보를 표준 필드로 정리한 구조화 페이로드를 만듭니다."""
-
-    return {
-        "kind": "personal_schedule",
-        "title": schedule["title"],
-        "date": schedule["date"],
-        "start_time": schedule["start_time"],
-        "end_time": schedule["end_time"],
-        "members": schedule["attendees"],
-        "priority": None,
-        "reason": "1주차 개인 일정 생성 도구가 일정 앱 공통 structured output으로 변환했습니다.",
-        "original_text": schedule["title"],
-        "source_schedule_id": schedule["id"],
-    }
-
-
 @tool
 def personal_create_schedule(
     title: str,
@@ -205,12 +88,24 @@ def personal_create_schedule(
         "created_at": now_iso(),
     }
     PERSONAL_SCHEDULES.append(schedule)
+    structured_request = {
+        "kind": "personal_schedule",
+        "title": schedule["title"],
+        "date": schedule["date"],
+        "start_time": schedule["start_time"],
+        "end_time": schedule["end_time"],
+        "members": schedule["attendees"],
+        "priority": None,
+        "reason": "1주차 개인 일정 생성 도구가 일정 앱 공통 structured output으로 변환했습니다.",
+        "original_text": schedule["title"],
+        "source_schedule_id": schedule["id"],
+    }
     return _json(
         {
             "ok": True,
             "tool_name": "personal_create_schedule",
             "created_schedule": schedule,
-            "structured_request": _schedule_structured_request(schedule),
+            "structured_request": structured_request,
         }
     )
 
