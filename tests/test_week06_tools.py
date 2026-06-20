@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextvars import Context
 from types import SimpleNamespace
 
 import fixed.runtime_clock as runtime_clock
@@ -8,7 +9,8 @@ import fixed.agent_runtime as runtime_module
 import fixed.week_agent_registry as agent_registry
 from fixed.agent_runtime import AgentRuntime
 from fixed.app_store import AppSQLiteStore
-from fixed.week_agent_registry import ActiveWeekAgentResult
+from fixed.session_scope import current_session_scope
+from fixed.week_agent_registry import ActiveWeekAgentResult, ActiveWeekAgentStreamEvent
 from student_parts.week05_load_kanas_past_conversations import extract_schedules_from_history
 from student_parts.week06_kanamate_decides_schedule import (
     agent_tool_names,
@@ -63,7 +65,7 @@ def test_week06_common_slots_accept_iso_datetime_date_bounds() -> None:
     assert all(row["date"] == target_day for row in result["busy_rows"] if row["member_name"] != "나")
 
 
-def test_runtime_passes_active_week_and_recent_messages(tmp_path, monkeypatch) -> None:
+def test_runtime_passes_active_week_and_full_current_conversation(tmp_path, monkeypatch) -> None:
     seen: dict[str, object] = {}
 
     def fake_run_active_week_agent(active_week: int, messages: list[dict[str, str]]) -> ActiveWeekAgentResult:
@@ -86,9 +88,87 @@ def test_runtime_passes_active_week_and_recent_messages(tmp_path, monkeypatch) -
     assert result.trace["conversation_id"] == conversation_id
     messages = seen["messages"]
     assert isinstance(messages, list)
-    assert len(messages) == 13
+    assert len(messages) == 33
+    assert messages[0]["role"] == "system"
+    assert "현재 채팅 기억" in messages[0]["content"]
+    assert messages[1]["role"] == "system"
+    assert "앱 SQLite DB에 저장된 일정" in messages[1]["content"]
+    assert "사용자: 이전 사용자 0" in messages[0]["content"]
+    assert "assistant: 이전 답변 14" in messages[0]["content"]
+    assert messages[2] == {"role": "user", "content": "이전 사용자 0"}
     assert messages[-1] == {"role": "user", "content": "새 요청"}
-    assert all(message["role"] in {"user", "assistant"} for message in messages)
+    assert all(message["role"] in {"system", "user", "assistant"} for message in messages)
+
+
+def test_runtime_new_chat_does_not_pass_previous_conversation(tmp_path, monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run_active_week_agent(active_week: int, messages: list[dict[str, str]]) -> ActiveWeekAgentResult:
+        seen["messages"] = messages
+        seen["session_scope"] = current_session_scope()
+        return ActiveWeekAgentResult(answer="new chat answer", trace={"events": []})
+
+    monkeypatch.setattr(runtime_module, "run_active_week_agent", fake_run_active_week_agent)
+    runtime = AgentRuntime(active_week=2)
+    runtime.app_store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    old_conversation_id = runtime.ensure_conversation(None, "이전 대화")
+    runtime.app_store.append_message(old_conversation_id, "user", "이전 사용자")
+    runtime.app_store.append_message(old_conversation_id, "assistant", "이전 답변")
+
+    result = runtime.run_agent("새 대화 첫 요청", None)
+
+    assert result.conversation_id != old_conversation_id
+    assert seen["session_scope"] == result.conversation_id
+    assert seen["messages"] == [{"role": "user", "content": "새 대화 첫 요청"}]
+
+
+def test_week3_new_chat_keeps_sqlite_memory_instruction_without_previous_transcript(tmp_path, monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run_active_week_agent(active_week: int, messages: list[dict[str, str]]) -> ActiveWeekAgentResult:
+        seen["active_week"] = active_week
+        seen["messages"] = messages
+        return ActiveWeekAgentResult(answer="week3 answer", trace={"events": []})
+
+    monkeypatch.setattr(runtime_module, "run_active_week_agent", fake_run_active_week_agent)
+    runtime = AgentRuntime(active_week=3)
+    runtime.app_store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    old_conversation_id = runtime.ensure_conversation(None, "이전 대화")
+    runtime.app_store.append_message(old_conversation_id, "user", "이전 사용자")
+    runtime.app_store.append_message(old_conversation_id, "assistant", "이전 답변")
+
+    runtime.run_agent("저장된 일정 보여줘", None)
+
+    assert seen["active_week"] == 3
+    assert seen["messages"] == [
+        {
+            "role": "system",
+            "content": runtime_module.SQLITE_MEMORY_INSTRUCTIONS,
+        },
+        {"role": "user", "content": "저장된 일정 보여줘"},
+    ]
+
+
+def test_runtime_stream_scope_does_not_cross_generator_yield_context(tmp_path, monkeypatch) -> None:
+    seen_scopes: list[str] = []
+
+    def fake_stream_active_week_agent(active_week: int, messages: list[dict[str, str]]) -> object:
+        seen_scopes.append(current_session_scope())
+        yield ActiveWeekAgentStreamEvent(status_text="답변을 진행중입니다")
+        seen_scopes.append(current_session_scope())
+        yield ActiveWeekAgentStreamEvent(result=ActiveWeekAgentResult(answer="stream answer", trace={"events": []}))
+
+    monkeypatch.setattr(runtime_module, "stream_active_week_agent", fake_stream_active_week_agent)
+    runtime = AgentRuntime(active_week=2)
+    runtime.app_store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    stream = runtime.stream_agent("스트림 테스트", None)
+
+    first_event = Context().run(lambda: next(stream))
+    Context().run(stream.close)
+
+    assert first_event.status_text == "답변을 진행중입니다"
+    assert len(seen_scopes) == 1
+    assert seen_scopes[0].startswith("conv_")
 
 
 def test_agent_registry_imports_only_selected_week(monkeypatch) -> None:

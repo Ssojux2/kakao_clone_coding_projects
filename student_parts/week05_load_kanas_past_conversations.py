@@ -5,6 +5,7 @@ from typing import Any
 from langchain.agents import create_agent
 from langchain.tools import tool
 
+from fixed.app_store import AppSQLiteStore
 from fixed.config import CONFIG
 from fixed.external_mcp import call_external_tool_payload
 from fixed.llm import chat_model
@@ -15,6 +16,7 @@ from fixed.mcp_client import (
     load_local_mcp_tools_sync,
 )
 from fixed.runtime_clock import current_app_date_iso
+from fixed.session_scope import DEFAULT_SESSION_SCOPE, current_session_scope
 from fixed.student_api import (
     collect_member_schedules_payload,
     json_payload,
@@ -53,7 +55,7 @@ _WEEK05_AGENT: Any | None = None
 #      - 공유 저장소 자체를 확인할 때는 list_shared_schedules로 "나"를 포함한 등록 row를 조회합니다.
 #
 #   5. collect_member_schedules
-#      - 내 일정은 PERSONAL_SCHEDULES를 이 tool 안에서 날짜 범위로 필터링합니다.
+#      - 3주차 이후 저장된 내 일정은 앱 SQLite에서 읽고, 현재 대화의 임시 일정만 추가로 합칩니다.
 #      - 외부 멤버 일정은 MCP extract_schedules_from_history 결과를 이 tool 안에서 읽습니다.
 #      - 두 출처를 member_name/title/date/start_time/end_time/notes가 있는 rows 배열로 직접 합칩니다.
 #      - schedule_summary도 함께 반환해 LLM이 바쁜 시간을 자연어로 설명할 수 있게 합니다.
@@ -74,6 +76,24 @@ call_mcp_tool = call_local_mcp_tool
 call_mcp_tool_sync = call_local_mcp_tool_sync
 load_langchain_mcp_tools = load_local_mcp_tools
 load_langchain_mcp_tools_sync = load_local_mcp_tools_sync
+
+
+def _schedule_scope(schedule: dict[str, Any]) -> str:
+    return str(schedule.get("session_id") or DEFAULT_SESSION_SCOPE)
+
+
+def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
+    """SQLite 저장 일정과 현재 대화의 임시 일정만 group 조율 후보로 사용합니다."""
+
+    db_schedules = AppSQLiteStore(CONFIG.app_db_path).list_schedules(limit=200)
+    seen_ids = {str(schedule.get("schedule_id")) for schedule in db_schedules if schedule.get("schedule_id")}
+    session_id = current_session_scope()
+    current_memory_schedules = [
+        schedule
+        for schedule in PERSONAL_SCHEDULES
+        if _schedule_scope(schedule) == session_id and str(schedule.get("id")) not in seen_ids
+    ]
+    return [*db_schedules, *current_memory_schedules]
 
 
 @tool
@@ -184,12 +204,13 @@ def collect_member_schedules(member_names: list[str], date_from: str, date_to: s
     """내 일정과 다른 사람들의 일정을 MCP SQLite 기록에서 모읍니다."""
 
     ensure_demo_personal_schedule()
+    personal_schedules = _personal_schedules_for_current_scope()
     return json_payload(
         collect_member_schedules_payload(
             member_names=member_names,
             date_from=date_from,
             date_to=date_to,
-            personal_schedules=PERSONAL_SCHEDULES,
+            personal_schedules=personal_schedules,
         )
     )
 
@@ -220,6 +241,7 @@ def week05_system_prompt() -> str:
         "load_conversation_messages, extract_schedules_from_history를 사용한다. "
         "공유 일정 저장소에 등록된 row 자체를 확인해야 하면 list_shared_schedules를 사용한다. "
         "내 일정과 외부 멤버 일정을 함께 모아야 하면 collect_member_schedules를 사용한다. "
+        "이때 내 이전 일정은 Week 3 이후 SQLite에 저장된 row를 기준으로 본다. "
         "내 일정이 공유 저장소에도 보여야 할 때는 create_shared_schedule/delete_shared_schedule을 사용한다. "
         "Week 5에서는 최종 회의 시간 결정 payload는 만들지 않고, 수집한 일정과 근거를 정리한다. "
         "도구 결과에 없는 일정이나 시간을 만들지 않는다."

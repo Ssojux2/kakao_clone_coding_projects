@@ -150,8 +150,17 @@ def _trace_message(trace: dict[str, Any]) -> str:
     return "\n".join(lines) if lines else "- trace 없음"
 
 
+def _sqlite_schedule_memory_enabled() -> bool:
+    return int(getattr(runtime, "active_week", CONFIG.active_week) or 1) >= 3
+
+
 def _saved_schedule_lines(limit: int = 8) -> list[str]:
-    rows = runtime.app_store.list_schedules(limit=limit)
+    if not _sqlite_schedule_memory_enabled():
+        return []
+    list_schedules = getattr(runtime.app_store, "list_schedules", None)
+    if list_schedules is None:
+        return []
+    rows = list_schedules(limit=limit)
     lines: list[str] = []
     for row in rows:
         date = row.get("date") or "날짜 미정"
@@ -163,6 +172,15 @@ def _saved_schedule_lines(limit: int = 8) -> list[str]:
         attendee_text = f" · 참석자: {', '.join(attendees)}" if attendees else ""
         lines.append(f"- {date} {time_range} · {title}{attendee_text}")
     return lines
+
+
+def _saved_schedule_markdown(limit: int = 8) -> str:
+    if not _sqlite_schedule_memory_enabled():
+        return "Week 3부터 SQLite에 저장된 일정이 표시됩니다."
+    lines = _saved_schedule_lines(limit=limit)
+    if not lines:
+        return "저장된 일정이 아직 없습니다."
+    return "\n".join(lines)
 
 
 def _chat_notice() -> list[dict[str, str]]:
@@ -238,6 +256,7 @@ def queue_user_message(
             gr.update(value="", interactive=True),
             "",
             gr.update(interactive=True),
+            _saved_schedule_markdown(),
             *_conversation_button_updates(conversation_id),
         )
 
@@ -254,6 +273,7 @@ def queue_user_message(
         gr.update(value="", interactive=False),
         message,
         gr.update(interactive=False),
+        _saved_schedule_markdown(),
         *_conversation_button_updates(active_conversation_id),
     )
 
@@ -273,6 +293,7 @@ def finish_agent_response(
             gr.update(interactive=True),
             "",
             gr.update(interactive=True),
+            _saved_schedule_markdown(),
             *_conversation_button_updates(conversation_id),
         )
         return
@@ -288,6 +309,7 @@ def finish_agent_response(
                 gr.update(interactive=False),
                 pending_message,
                 gr.update(interactive=False),
+                _saved_schedule_markdown(),
                 *_conversation_button_updates(conversation_id),
             )
         if event.result:
@@ -299,30 +321,36 @@ def finish_agent_response(
                 gr.update(interactive=True),
                 "",
                 gr.update(interactive=True),
+                _saved_schedule_markdown(),
                 *_conversation_button_updates(event.result.conversation_id),
             )
             return
 
 
 def new_chat() -> tuple:
-    return (_chat_notice(), {}, "", *_conversation_button_updates(None))
+    return (_chat_notice(), {}, "", _saved_schedule_markdown(), *_conversation_button_updates(None))
 
 
 def load_chat(conversation_id: str | None) -> tuple:
     if not conversation_id:
-        return (_chat_notice(), "", *_conversation_button_updates(None))
-    return (runtime.load_messages_for_chatbot(conversation_id), conversation_id, *_conversation_button_updates(conversation_id))
+        return (_chat_notice(), "", _saved_schedule_markdown(), *_conversation_button_updates(None))
+    return (
+        runtime.load_messages_for_chatbot(conversation_id),
+        conversation_id,
+        _saved_schedule_markdown(),
+        *_conversation_button_updates(conversation_id),
+    )
 
 
 def archive_chat(conversation_id: str | None) -> tuple:
     runtime.archive_conversation(conversation_id)
-    return (_chat_notice(), {}, "", *_conversation_button_updates(None))
+    return (_chat_notice(), {}, "", _saved_schedule_markdown(), *_conversation_button_updates(None))
 
 
 def delete_chat(conversation_id: str | None) -> tuple:
     if conversation_id:
         runtime.delete_conversation(conversation_id)
-    return (_chat_notice(), {}, "", *_conversation_button_updates(None))
+    return (_chat_notice(), {}, "", _saved_schedule_markdown(), *_conversation_button_updates(None))
 
 
 def conversation_id_at(index: int) -> str:
@@ -359,6 +387,13 @@ def build_demo() -> gr.Blocks:
                             )
                             for _ in range(MAX_CONVERSATION_BUTTONS)
                         ]
+                        gr.HTML("<div class='conversation-list-title'>저장된 일정</div>", container=False)
+                        saved_schedules = gr.Markdown(
+                            value=_saved_schedule_markdown(),
+                            show_label=False,
+                            elem_id="saved-schedule-list",
+                            elem_classes=["saved-schedule-list"],
+                        )
                         archive_btn = gr.Button("현재 대화 보관", elem_classes=["ghost-action"])
                         delete_btn = gr.Button("저장된 대화 삭제", elem_classes=["danger-action"])
                     with gr.Column(scale=4, min_width=560, elem_classes=["chat-panel"]):
@@ -390,8 +425,26 @@ def build_demo() -> gr.Blocks:
                             max_height=780,
                         )
 
-        send_outputs = [chatbot, trace_json, conversation_id, textbox, pending_message, send_btn, *conversation_buttons]
-        finish_outputs = [chatbot, trace_json, conversation_id, textbox, pending_message, send_btn, *conversation_buttons]
+        send_outputs = [
+            chatbot,
+            trace_json,
+            conversation_id,
+            textbox,
+            pending_message,
+            send_btn,
+            saved_schedules,
+            *conversation_buttons,
+        ]
+        finish_outputs = [
+            chatbot,
+            trace_json,
+            conversation_id,
+            textbox,
+            pending_message,
+            send_btn,
+            saved_schedules,
+            *conversation_buttons,
+        ]
         send_btn.click(
             queue_user_message,
             inputs=[textbox, chatbot, conversation_id],
@@ -403,12 +456,16 @@ def build_demo() -> gr.Blocks:
             outputs=finish_outputs,
             show_progress="hidden",
         )
-        new_btn.click(new_chat, outputs=[chatbot, trace_json, conversation_id, *conversation_buttons])
-        archive_btn.click(archive_chat, inputs=[conversation_id], outputs=[chatbot, trace_json, conversation_id, *conversation_buttons])
+        new_btn.click(new_chat, outputs=[chatbot, trace_json, conversation_id, saved_schedules, *conversation_buttons])
+        archive_btn.click(
+            archive_chat,
+            inputs=[conversation_id],
+            outputs=[chatbot, trace_json, conversation_id, saved_schedules, *conversation_buttons],
+        )
         delete_btn.click(
             delete_chat,
             inputs=[conversation_id],
-            outputs=[chatbot, trace_json, conversation_id, *conversation_buttons],
+            outputs=[chatbot, trace_json, conversation_id, saved_schedules, *conversation_buttons],
             js=DELETE_CONVERSATION_CONFIRM_JS,
             queue=False,
         )
@@ -420,10 +477,13 @@ def build_demo() -> gr.Blocks:
             ).then(
                 load_chat,
                 inputs=[conversation_id],
-                outputs=[chatbot, conversation_id, *conversation_buttons],
+                outputs=[chatbot, conversation_id, saved_schedules, *conversation_buttons],
                 show_progress="hidden",
             )
-        demo.load(lambda: _conversation_button_updates(None), outputs=conversation_buttons)
+        demo.load(
+            lambda: (_saved_schedule_markdown(), *_conversation_button_updates(None)),
+            outputs=[saved_schedules, *conversation_buttons],
+        )
     return demo
 
 

@@ -117,6 +117,7 @@ def _nana_capability_text() -> str:
         "personal_delete_schedule을 사용한다.",
         "Week 2 날짜/시간/종류/멤버 판단이 필요하면 extract_schedule_request를 호출한다.",
         "Week 3 저장/조회는 save_structured_request, list_saved_requests, get_saved_request를 사용한다.",
+        "저장된 일정 목록이나 내 일정 조회 요청이면 personal_list_saved_schedules 또는 search_saved_requests로 앱 SQLite row를 확인한다.",
         "일정 삭제 요청이면 personal_list_saved_schedules로 후보를 확인하고 "
         "personal_delete_saved_schedules를 호출한다.",
         "일정 수정 요청이면 personal_list_saved_schedules로 내 앱 DB 일정 원본 후보를 확인하고 "
@@ -133,7 +134,9 @@ def _nana_workflow_text() -> str:
     return (
         "개인 일정 생성 요청이면 extract_schedule_request 결과를 바탕으로 personal_create_schedule을 호출하고, "
         "personal_create_schedule 결과의 structured_request를 save_structured_request payload로 전달해 앱 DB에 저장한다. "
+        "사용자가 참석자나 팀원을 따로 말하지 않은 일정은 '회의'나 '미팅'이라는 단어가 있어도 나만 포함한 개인 일정으로 저장한다. "
         "저장된 개인 일정은 공유 일정에도 자동 동기화된다. 개인 일정 수정/삭제는 반드시 앱 DB에 저장된 내 일정 원본을 기준으로 수행한다."
+        " 새 대화에서도 Week 3 이후 SQLite에 저장된 개인 일정은 조회 가능하다."
     )
 
 
@@ -194,7 +197,9 @@ def supervisor_system_prompt() -> str:
         "kana_agent에 맡긴다. 반드시 nana_agent 또는 kana_agent 도구 중 하나를 직접 호출한 뒤, "
         "그 도구 결과만 근거로 최종 답변을 작성한다. "
         "개인 일정 생성/조회/수정/삭제, todo/reminder 저장, 개인 참고자료 검색은 nana_agent에게 위임한다. "
-        "팀원, 그룹, 여러 사람, 모두의 일정 조율은 kana_agent에게 위임한다. "
+        "참석자나 팀원이 따로 명시되지 않은 '내 회의'나 '내 미팅'은 개인 일정이므로 nana_agent에게 위임한다. "
+        "'회의'나 '미팅'이라는 단어만으로 그룹 일정으로 추측하지 않는다. "
+        "팀원, 그룹, 여러 사람, 모두의 일정 조율처럼 명시적인 여러 사람 단서가 있을 때만 kana_agent에게 위임한다. "
         "단, 사용자가 '그 시간', '방금 정한 시간', '아까 제안한 일정'처럼 이전 답변의 특정 "
         "후보를 그대로 사용하라고 하면 kana_agent로 다시 재탐색하지 말고, 이전 대화에 나온 "
         "날짜와 시간을 명시적으로 포함해 nana_agent에 위임한다. 사용자가 다시 찾아달라고 "

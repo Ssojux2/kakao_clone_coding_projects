@@ -12,9 +12,13 @@ from langchain_core.messages import AIMessage, ToolMessage
 class FakeStore:
     def __init__(self) -> None:
         self.rows: list[dict[str, str]] = []
+        self.schedule_rows: list[dict[str, Any]] = []
 
     def list_conversations(self) -> list[dict[str, str]]:
         return self.rows
+
+    def list_schedules(self, limit: int = 12) -> list[dict[str, Any]]:
+        return self.schedule_rows[:limit]
 
 
 def test_stream_active_week_agent_yields_tool_progress(monkeypatch) -> None:
@@ -74,6 +78,25 @@ def test_queue_user_message_adds_pending_status(monkeypatch) -> None:
         {"role": "user", "content": "안녕"},
         {"role": "assistant", "content": "...\n\n<small>답변을 진행중입니다</small>"},
     ]
+
+
+def test_saved_schedule_sidebar_uses_sqlite_only_from_week3(monkeypatch) -> None:
+    fake_store = FakeStore()
+    fake_store.schedule_rows = [
+        {
+            "date": "2026-05-21",
+            "start_time": "10:00",
+            "end_time": "11:00",
+            "title": "저장된 일정",
+            "attendees": ["나"],
+        }
+    ]
+
+    monkeypatch.setattr(app, "runtime", SimpleNamespace(active_week=2, app_store=fake_store))
+    assert app._saved_schedule_markdown() == "Week 3부터 SQLite에 저장된 일정이 표시됩니다."
+
+    monkeypatch.setattr(app, "runtime", SimpleNamespace(active_week=3, app_store=fake_store))
+    assert "저장된 일정" in app._saved_schedule_markdown()
 
 
 def test_finish_agent_response_updates_pending_message(monkeypatch) -> None:

@@ -216,6 +216,8 @@ def week03_system_prompt() -> str:
         "사용자의 자연어 요청은 필요하면 extract_schedule_request로 구조화한다. "
         "새 일정, 할 일, 알림을 저장해야 하면 structured_request를 save_structured_request에 전달한다. "
         "저장된 요청 조회는 list_saved_requests/get_saved_request를 사용한다. "
+        "저장된 일정 목록이나 내 일정 조회 요청은 personal_list_saved_schedules로 앱 SQLite 일정 row를 확인한다. "
+        "새 대화에서 이전에 저장한 중요한 일정/할 일/알림을 참고해야 할 때는 대화 전사가 아니라 SQLite 조회 도구 결과만 근거로 삼는다. "
         "저장 일정 수정/삭제는 personal_list_saved_schedules로 후보를 확인한 뒤 "
         "personal_update_saved_schedule 또는 personal_delete_saved_schedules를 사용한다. "
         "Week 3에서는 개인 RAG와 외부 멤버 일정 조율을 처리하지 않는다. "

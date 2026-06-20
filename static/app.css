@@ -191,6 +191,32 @@ footer[aria-label="Gradio footer navigation"] {
   outline-offset: 2px;
 }
 
+#saved-schedule-list {
+  background: #ffffff;
+  border: 1px solid #eee6cb;
+  border-radius: 8px;
+  color: #39352e;
+  font-size: 12px;
+  line-height: 1.45;
+  max-height: 190px;
+  overflow: auto;
+  padding: 10px 12px;
+}
+
+#saved-schedule-list p,
+#saved-schedule-list ul {
+  margin: 0;
+}
+
+#saved-schedule-list li {
+  margin: 0 0 7px;
+  overflow-wrap: anywhere;
+}
+
+#saved-schedule-list li:last-child {
+  margin-bottom: 0;
+}
+
 .chat-panel {
   flex-wrap: nowrap !important;
   height: calc(100dvh - 142px);

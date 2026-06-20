@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from fixed.config import CONFIG
 from fixed.llm import chat_model
 from fixed.runtime_clock import current_app_date_iso
+from fixed.schedule_defaults import normalize_schedule_payload_for_private_default
 from student_parts.week01_wake_up_nana import week01_tools
 
 
@@ -73,7 +74,10 @@ def structured_output_system_prompt() -> str:
         "날짜는 YYYY-MM-DD, 시간은 HH:MM 24시간 형식으로 채운다. "
         f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
         "오늘, 내일, 모레, 다음 주, 요일 표현 같은 상대 날짜는 이 현재 날짜를 기준으로 판단한다. "
-        "외부 팀원처럼 구체적인 이름이 없는 표현은 기본 외부 팀원 철수와 영희를 members에 반영한다. "
+        "참석자나 팀원이 명시되지 않은 일정은 personal_schedule으로 분류하고 members에는 나만 넣는다. "
+        "'회의'나 '미팅'이라는 단어만으로 group_schedule으로 보거나 철수/영희를 추측해 넣지 않는다. "
+        "철수, 영희 같은 구체적인 이름이나 외부 팀원, 팀원들, 같이, 함께처럼 여러 사람 단서가 있을 때만 "
+        "group_schedule로 분류하고 해당 멤버를 members에 반영한다. "
         "확실하지 않은 필드는 None 또는 빈 배열로 두고, reason에는 어떤 단서를 근거로 구조화했는지 짧게 쓴다."
     )
 
@@ -114,12 +118,13 @@ def extract_schedule_request(query: str) -> str:
     """사용자 프롬프트를 일정 앱용 구조화 요청 JSON으로 변환합니다."""
 
     structured = extract_structured_request(query)
+    normalized = normalize_schedule_payload_for_private_default(structured.model_dump(), source_text=query)
     return json.dumps(
         {
             "ok": True,
             "tool_name": "extract_schedule_request",
             "base_date": current_app_date_iso(),
-            "structured_request": structured.model_dump(),
+            "structured_request": StructuredRequest.model_validate(normalized).model_dump(),
         },
         ensure_ascii=False,
     )
@@ -139,6 +144,7 @@ def week02_system_prompt() -> str:
         f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
         "사용자의 자연어 일정 요청을 읽고, 날짜/시간/멤버/종류 판단이 필요하면 extract_schedule_request를 먼저 호출한다. "
         "개인 일정 생성, 조회, 삭제는 Week 1 tool을 사용한다. "
+        "Week 1-2의 개인 일정 tool 결과는 현재 대화 안에서만 유지되는 임시 메모리이며, 새 대화에서는 이전 임시 일정을 보지 않는다. "
         "Week 2에서는 SQLite 저장, RAG, 외부 멤버 일정 조율을 처리하지 않는다. "
         "도구 결과의 structured_request를 근거로 짧고 자연스럽게 답한다."
     )

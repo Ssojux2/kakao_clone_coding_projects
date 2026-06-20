@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from dataclasses import replace
 
 import fixed.runtime_clock as runtime_clock
 import student_parts.week05_load_kanas_past_conversations as week05_module
 from fixed.app_store import AppSQLiteStore
 from fixed.external_people_store import ExternalPeopleSQLiteStore
+from fixed.session_scope import conversation_session_scope
 from fixed.store_base import new_id
 
 
@@ -369,6 +371,46 @@ def test_week05_collect_member_schedules_uses_default_external_members() -> None
     assert "15:00-16:00" in result["schedule_summary"]
     assert "영희 | 콘텐츠 점검 |" in result["schedule_summary"]
     assert "16:00-17:00" in result["schedule_summary"]
+
+
+def test_week05_collect_member_schedules_reads_saved_sqlite_not_other_chat_memory(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "app.sqlite3"
+    monkeypatch.setattr(week05_module, "CONFIG", replace(week05_module.CONFIG, app_db_path=db_path))
+    week05_module.PERSONAL_SCHEDULES.clear()
+    week05_module.PERSONAL_SCHEDULES.append(
+        {
+            "id": "personal_other_chat",
+            "title": "다른 대화 임시 일정",
+            "date": "2026-06-12",
+            "start_time": "09:00",
+            "end_time": "10:00",
+            "attendees": ["나"],
+            "session_id": "other_chat",
+        }
+    )
+    AppSQLiteStore(db_path).save_structured_request(
+        {
+            "kind": "group_schedule",
+            "title": "SQLite 저장 일정",
+            "date": "2026-06-12",
+            "start_time": "11:00",
+            "end_time": "12:00",
+            "members": ["나"],
+        }
+    )
+
+    with conversation_session_scope("new_chat"):
+        result = json.loads(
+            week05_module.collect_member_schedules.invoke(
+                {"member_names": [], "date_from": "2026-06-12", "date_to": "2026-06-12"}
+            )
+        )
+
+    my_titles = {row["title"] for row in result["rows"] if row["member_name"] == "나"}
+    week05_module.PERSONAL_SCHEDULES.clear()
+
+    assert "SQLite 저장 일정" in my_titles
+    assert "다른 대화 임시 일정" not in my_titles
 
 
 def test_week05_collect_member_schedules_reads_external_rows_through_mcp_env(tmp_path, monkeypatch) -> None:

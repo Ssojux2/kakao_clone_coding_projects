@@ -233,8 +233,29 @@ class AppSQLiteStore(SQLiteFileStore):
         saved_rows: list[dict[str, Any]] = []
         shared_sync: dict[str, Any] | None = None
         schedule_for_shared: dict[str, Any] | None = None
+        source_schedule_id = str(payload.get("source_schedule_id") or "").strip()
 
         with self.connect() as conn:
+            if kind in {"personal_schedule", "group_schedule"} and source_schedule_id:
+                existing_schedule = conn.execute(
+                    """
+                    SELECT schedule_id, request_id
+                    FROM schedules
+                    WHERE schedule_id = ?
+                    """,
+                    (source_schedule_id,),
+                ).fetchone()
+                if existing_schedule is not None:
+                    return {
+                        "request_id": existing_schedule["request_id"],
+                        "kind": kind,
+                        "saved_rows": [
+                            {"table": "structured_requests", "id": existing_schedule["request_id"], "existing": True},
+                            {"table": "schedules", "id": existing_schedule["schedule_id"], "existing": True},
+                        ],
+                        "shared_sync": None,
+                        "already_exists": True,
+                    }
             conn.execute(
                 """
                 INSERT INTO structured_requests
@@ -260,7 +281,7 @@ class AppSQLiteStore(SQLiteFileStore):
             # structured_requests는 원본 감사 로그이고, 아래 분기들은 agent/tool이
             # 빠르게 조회하기 쉬운 테이블로 payload를 한 번 더 풀어 저장합니다.
             if kind in {"personal_schedule", "group_schedule"}:
-                schedule_id = new_id("sch")
+                schedule_id = source_schedule_id or new_id("sch")
                 conn.execute(
                     """
                     INSERT INTO schedules
@@ -386,19 +407,40 @@ class AppSQLiteStore(SQLiteFileStore):
 
     # Schedule lookup and deletion
 
-    def list_schedules(self, limit: int = 12) -> list[dict[str, Any]]:
+    def list_schedules(
+        self,
+        limit: int = 12,
+        kind: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
         """저장된 일정 후보를 날짜/시간순으로 반환합니다."""
 
-        with self.connect() as conn:
-            cur = conn.execute(
-                f"""
-                SELECT {SCHEDULE_COLUMNS}
+        where: list[str] = []
+        params: list[Any] = []
+        if kind:
+            where.append("(SELECT kind FROM structured_requests WHERE request_id = schedules.request_id) = ?")
+            params.append(kind)
+        if date_from:
+            where.append("date >= ?")
+            params.append(date_from)
+        if date_to:
+            where.append("date <= ?")
+            params.append(date_to)
+
+        query = f"""
+                SELECT {SCHEDULE_COLUMNS_WITH_KIND}
                 FROM schedules
+                """
+        if where:
+            query += " WHERE " + " AND ".join(where)
+        query += """
                 ORDER BY (date IS NULL), date ASC, (start_time IS NULL), start_time ASC, created_at DESC
                 LIMIT ?
-                """,
-                (limit,),
-            )
+                """
+        params.append(limit)
+        with self.connect() as conn:
+            cur = conn.execute(query, params)
             rows = [dict(row) for row in cur.fetchall()]
         return [decode_schedule_row(row) for row in rows]
 

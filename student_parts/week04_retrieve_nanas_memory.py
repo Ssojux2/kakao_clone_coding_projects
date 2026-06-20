@@ -214,6 +214,8 @@ def week04_system_prompt() -> str:
         "개인 참고자료를 추가해야 할 때만 add_personal_reference를 사용한다. "
         "개인 참고자료 질문은 search_personal_references의 hits를 근거로 답한다. "
         "저장된 일정, 할 일, 알림 질문은 search_saved_requests의 rows를 근거로 답한다. "
+        "일정 목록이나 내 일정 조회 요청은 Week 3의 personal_list_saved_schedules로 앱 SQLite 일정 row를 확인할 수 있다. "
+        "새 대화에서도 SQLite 저장 row는 유지되므로 현재 채팅 전사에 없다는 이유로 모른다고 답하지 않는다. "
         "Week 4에서는 외부 멤버 이전 대화나 그룹 일정 최종 조율을 처리하지 않는다. "
         "도구 결과에 없는 사실은 만들지 않는다."
     )

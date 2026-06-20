@@ -13,6 +13,7 @@ from typing import Any, Callable
 from fixed.app_store import AppSQLiteStore
 from fixed.config import CONFIG
 from fixed.mcp_client import call_local_mcp_tool_sync
+from fixed.schedule_defaults import normalize_schedule_payload_for_private_default
 from fixed.external_people_store import (
     external_schedule_summary,
     normalize_external_member_names,
@@ -43,7 +44,8 @@ def save_structured_request_payload(
     """structured request를 앱 DB에 저장하고 tool 결과 payload를 만듭니다."""
 
     selected_store = store or AppSQLiteStore(CONFIG.app_db_path)
-    saved = selected_store.save_structured_request(coerce_payload(payload))
+    normalized_payload = normalize_schedule_payload_for_private_default(coerce_payload(payload))
+    saved = selected_store.save_structured_request(normalized_payload)
     return {"ok": True, "tool_name": "save_structured_request", **saved}
 
 

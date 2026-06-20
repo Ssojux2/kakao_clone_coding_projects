@@ -18,6 +18,7 @@ from fixed.langchain_trace import (
 )
 from fixed.llm import chat_model
 from fixed.runtime_clock import current_app_date_iso, next_weekday_iso
+from fixed.session_scope import DEFAULT_SESSION_SCOPE, current_session_scope
 from fixed.store_base import new_id, now_iso
 
 
@@ -67,6 +68,17 @@ def _json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _schedule_scope(schedule: dict[str, Any]) -> str:
+    """기존 직접 tool 호출 row는 기본 scope로 취급합니다."""
+
+    return str(schedule.get("session_id") or DEFAULT_SESSION_SCOPE)
+
+
+def _current_session_schedules() -> list[dict[str, Any]]:
+    session_id = current_session_scope()
+    return [schedule for schedule in PERSONAL_SCHEDULES if _schedule_scope(schedule) == session_id]
+
+
 @tool
 def personal_create_schedule(
     title: str,
@@ -85,6 +97,7 @@ def personal_create_schedule(
         "start_time": start_time,
         "end_time": end_time,
         "attendees": attendees or [],
+        "session_id": current_session_scope(),
         "created_at": now_iso(),
     }
     PERSONAL_SCHEDULES.append(schedule)
@@ -116,7 +129,7 @@ def personal_list_schedules(date_from: str | None = None, date_to: str | None = 
 
     schedules = [
         schedule
-        for schedule in PERSONAL_SCHEDULES
+        for schedule in _current_session_schedules()
         if (not date_from or schedule["date"] >= date_from) and (not date_to or schedule["date"] <= date_to)
     ]
     return _json({"ok": True, "tool_name": "personal_list_schedules", "schedules": schedules})
@@ -127,7 +140,12 @@ def personal_delete_schedule(schedule_id: str) -> str:
     """일정 ID에 해당하는 개인 일정을 삭제합니다."""
 
     before = len(PERSONAL_SCHEDULES)
-    PERSONAL_SCHEDULES[:] = [schedule for schedule in PERSONAL_SCHEDULES if schedule["id"] != schedule_id]
+    session_id = current_session_scope()
+    PERSONAL_SCHEDULES[:] = [
+        schedule
+        for schedule in PERSONAL_SCHEDULES
+        if not (schedule["id"] == schedule_id and _schedule_scope(schedule) == session_id)
+    ]
     deleted = len(PERSONAL_SCHEDULES) != before
     return _json(
         {
@@ -154,6 +172,7 @@ def week01_system_prompt() -> str:
         "사용자의 개인 일정 생성, 조회, 삭제 요청을 읽고 필요한 tool을 직접 선택한다. "
         "일정을 만들 때는 personal_create_schedule을 호출하고, 조회할 때는 personal_list_schedules를 호출한다. "
         "삭제할 schedule_id를 알고 있으면 personal_delete_schedule을 사용한다. "
+        "Week 1 도구의 일정은 현재 대화 안에서만 유지되는 임시 메모리이며, 새 대화에서는 이전 임시 일정을 보지 않는다. "
         "Week 1에서는 SQLite 저장, RAG, 외부 멤버 일정 조율을 처리하지 않는다. "
         "도구 결과에 없는 사실은 만들지 말고, 사용자에게는 자연스럽게 한국어로 답한다."
     )
