@@ -17,7 +17,6 @@ from fixed.store_base import SQLiteFileStore, new_id
 
 
 EXTERNAL_MEMBER_ALIAS: dict[str, str] = {}
-DEFAULT_EXTERNAL_MEMBERS = ["철수", "영희"]
 PERSONAL_SHARED_MEMBER_NAME = "나"
 
 
@@ -28,18 +27,13 @@ def external_db_path_from_env() -> Path:
 
 
 def normalize_external_member_names(member_names: list[str] | None) -> list[str]:
-    """외부 저장소에서 쓰는 멤버 이름 목록으로 정규화합니다.
+    """외부 저장소에서 쓰는 멤버 이름 목록으로 정규화합니다."""
 
-    빈 목록이나 None이 들어오면 수업 fixture의 기본 외부 멤버인 철수/영희를 사용합니다.
-    `EXTERNAL_MEMBER_ALIAS`는 별명/오타를 실제 저장 이름으로 맞추기 위한 확장 지점입니다.
-    """
-
-    normalized = [
+    return [
         EXTERNAL_MEMBER_ALIAS.get(str(name).strip(), str(name).strip())
         for name in (member_names or [])
         if str(name).strip()
     ]
-    return normalized or list(DEFAULT_EXTERNAL_MEMBERS)
 
 
 def normalize_external_schedule_date_bounds(
@@ -47,20 +41,10 @@ def normalize_external_schedule_date_bounds(
     date_from: str,
     date_to: str,
 ) -> tuple[str, str]:
-    """외부 일정 조회 날짜 범위를 fixture 친화적으로 정리합니다.
+    """외부 일정 조회 날짜 범위의 ISO datetime에서 날짜 부분만 남깁니다."""
 
-    ISO datetime이 들어오면 날짜 부분만 남깁니다. 기본 외부 멤버 전체를 "다음 주 화요일"
-    하루로 조회하는 요청은 수업 데모 일정이 모두 보이도록 목요일까지 확장합니다.
-    """
-
-    normalized_members = normalize_external_member_names(member_names)
     normalized_date_from = str(date_from).split("T", 1)[0].strip() if date_from is not None else ""
     normalized_date_to = str(date_to).split("T", 1)[0].strip() if date_to is not None else ""
-    if (
-        set(normalized_members) == set(DEFAULT_EXTERNAL_MEMBERS)
-        and normalized_date_from == normalized_date_to == next_weekday_iso(1)
-    ):
-        normalized_date_to = next_weekday_iso(3)
     return normalized_date_from, normalized_date_to
 
 
@@ -350,6 +334,8 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
             for name in (member_names or [])
             if str(name).strip()
         ]
+        if member_names is not None and not normalized_members:
+            return []
         if normalized_members:
             placeholders = ",".join("?" for _ in normalized_members)
             where.append(f"member_name IN ({placeholders})")
@@ -384,22 +370,22 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
         member_names: list[str] | None = None,
         limit: int = 5,
     ) -> list[dict[str, Any]]:
-        """외부 멤버의 과거 메시지를 키워드와 멤버 필터로 검색합니다."""
+        """LLM이 넘긴 query와 멤버 필터로 외부 멤버의 과거 메시지를 검색합니다."""
 
-        terms = [term for term in query.replace(",", " ").split() if term]
+        query_text = str(query or "").strip()
         clauses: list[str] = []
         params: list[Any] = []
         if member_names is not None:
             normalized_members = normalize_external_member_names(member_names)
+            if not normalized_members:
+                return []
             placeholders = ",".join("?" for _ in normalized_members)
             clauses.append(f"c.member_name IN ({placeholders})")
             params.extend(normalized_members)
-        if terms:
-            like_clause = " OR ".join(["m.content LIKE ? OR c.title LIKE ?" for _ in terms])
-            clauses.append(f"({like_clause})")
-            for term in terms:
-                token = f"%{term}%"
-                params.extend([token, token])
+        if query_text:
+            clauses.append("(m.content LIKE ? OR c.title LIKE ?)")
+            token = f"%{query_text}%"
+            params.extend([token, token])
         sql = """
             SELECT c.conversation_id, c.member_name, c.title, m.content, m.created_at
             FROM external_conversations c
@@ -439,19 +425,26 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
         seed된 `external_schedules` 테이블 조회로 재현합니다.
         """
 
-        member_names = normalize_external_member_names(member_names)
+        normalized_members = normalize_external_member_names(member_names)
         date_from, date_to = normalize_external_schedule_date_bounds(member_names, date_from, date_to)
-        placeholders = ",".join("?" for _ in member_names)
+        member_filter = ""
+        params: list[Any] = [date_from, date_to]
+        if member_names is not None:
+            if not normalized_members:
+                return []
+            placeholders = ",".join("?" for _ in normalized_members)
+            member_filter = f"AND member_name IN ({placeholders})"
+            params.extend(normalized_members)
         with self.connect() as conn:
             cur = conn.execute(
                 f"""
                 SELECT member_name, title, date, start_time, end_time, notes, source_conversation_id
                 FROM external_schedules
-                WHERE member_name IN ({placeholders})
-                  AND date >= ?
+                WHERE date >= ?
                   AND date <= ?
+                  {member_filter}
                 ORDER BY date, start_time
                 """,
-                [*member_names, date_from, date_to],
+                params,
             )
             return [dict(row) for row in cur.fetchall()]

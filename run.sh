@@ -18,8 +18,6 @@ Usage:
   ./run.sh --test          Run offline pytest + golden scenario tests with uv
   ./run.sh --integration-test
                            Run API-backed integration pytest tests with uv
-  ./run.sh --make-student-copy [DIR]
-                           Build a student distribution with reference answers stripped
   ./run.sh --conda [ARGS]  Use the legacy conda environment.yml runner
   ./run.sh --help          Show this help
 
@@ -66,9 +64,6 @@ run_uv() {
       ;;
     --integration-test)
       uv run pytest -m integration -q
-      ;;
-    --make-student-copy)
-      uv run python -m scripts.make_student_distribution "${2:-}"
       ;;
     --help|-h)
       usage
@@ -134,9 +129,6 @@ run_conda() {
       ;;
     --integration-test)
       pytest -m integration -q
-      ;;
-    --make-student-copy)
-      python -m scripts.make_student_distribution "${2:-}"
       ;;
     --help|-h)
       usage

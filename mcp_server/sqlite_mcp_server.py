@@ -31,8 +31,10 @@ mcp = FastMCP("kanana-sqlite-history")
 def search_previous_conversations(query: str, member_names: list[str] | None = None, limit: int = 5) -> str:
     """외부 Kanana SQLite 데이터베이스에서 이전 대화를 검색합니다.
 
-    `member_names`가 None이면 모든 멤버를 대상으로 검색하고, 빈 list면 store에서
-    기본 외부 멤버로 보정합니다. 반환 rows는 conversation_id와 메시지 content를 포함합니다.
+    `query`에는 LLM이 직접 고른 핵심 검색 문자열을 넣습니다. 서버는 query를
+    토큰화하거나 조사/불용어 처리를 하지 않습니다.
+    `member_names`가 None이면 모든 멤버를 대상으로 검색하고, 빈 list면 명시된
+    멤버가 없는 요청으로 보아 빈 rows를 반환합니다. 반환 rows는 conversation_id와 메시지 content를 포함합니다.
     """
 
     rows = STORE.search_previous_conversations(query=query, member_names=member_names, limit=limit)

@@ -187,6 +187,70 @@ class AppSQLiteStore(SQLiteFileStore):
             )
             return [dict(row) for row in cur.fetchall()]
 
+    def search_conversation_messages(
+        self,
+        query: str,
+        conversation_id: str | None = None,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """앱 DB에 저장된 일반 채팅 메시지를 검색합니다.
+
+        `search_saved_requests`가 구조화된 일정/할 일/알림만 보는 것과 달리,
+        이 조회는 Gradio 채팅 UI의 `messages` 테이블을 대상으로 합니다.
+        """
+
+        query_text = str(query or "").strip()
+        if not query_text:
+            return []
+
+        try:
+            normalized_limit = int(limit or 5)
+        except (TypeError, ValueError):
+            normalized_limit = 5
+        normalized_limit = max(1, min(normalized_limit, 50))
+        fetch_limit = max(normalized_limit * 10, 50)
+        clauses: list[str] = []
+        params: list[Any] = []
+        if conversation_id:
+            clauses.append("m.conversation_id = ?")
+            params.append(conversation_id)
+        clauses.append("(m.content LIKE ? OR c.title LIKE ?)")
+        token = f"%{query_text}%"
+        params.extend([token, token])
+
+        sql = """
+            SELECT m.message_id, m.conversation_id, c.title AS conversation_title,
+                   m.role, m.content, m.created_at
+            FROM messages m
+            JOIN conversations c ON c.conversation_id = m.conversation_id
+        """
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?"
+        params.append(fetch_limit)
+
+        with self.connect() as conn:
+            rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+        lowered_query = query_text.lower()
+
+        def score(row: dict[str, Any]) -> tuple[int, str]:
+            content_text = str(row.get("content") or "").lower()
+            title_text = str(row.get("conversation_title") or "").lower()
+            value = 0
+            if lowered_query in content_text:
+                value += min(len(query_text), 8)
+            if lowered_query in title_text:
+                value += 1
+            if row.get("role") == "user":
+                value += 3
+            if str(row.get("content") or "").strip().endswith(("?", "？")):
+                value -= 5
+            return value, str(row.get("created_at") or "")
+
+        rows.sort(key=score, reverse=True)
+        return rows[:normalized_limit]
+
     def archive_conversation(self, conversation_id: str) -> dict[str, Any]:
         """대화를 목록에서 숨기기 위해 상태를 archived로 바꿉니다."""
 
@@ -385,18 +449,16 @@ class AppSQLiteStore(SQLiteFileStore):
         Week 4의 RAG 보조 도구가 SQLite 기록에서 일정/할 일/알림 근거를 찾을 때 사용합니다.
         """
 
-        terms = [term for term in query.replace(",", " ").split() if term]
+        query_text = str(query or "").strip()
         clauses = []
         params: list[Any] = []
         if kind:
             clauses.append("kind = ?")
             params.append(kind)
-        if terms:
-            like_clause = " OR ".join(["raw_json LIKE ? OR title LIKE ? OR reason LIKE ?" for _ in terms])
-            clauses.append(f"({like_clause})")
-            for term in terms:
-                token = f"%{term}%"
-                params.extend([token, token, token])
+        if query_text:
+            clauses.append("(raw_json LIKE ? OR title LIKE ? OR reason LIKE ?)")
+            token = f"%{query_text}%"
+            params.extend([token, token, token])
         sql = "SELECT * FROM structured_requests"
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
@@ -578,8 +640,8 @@ class AppSQLiteStore(SQLiteFileStore):
             where.append("date = ?")
             params.append(date)
         if title:
-            where.append("(title LIKE ? OR REPLACE(title, ' ', '') LIKE ?)")
-            params.extend([f"%{title}%", f"%{title.replace(' ', '')}%"])
+            where.append("title LIKE ?")
+            params.append(f"%{title}%")
         if start_time:
             where.append("start_time = ?")
             params.append(start_time)

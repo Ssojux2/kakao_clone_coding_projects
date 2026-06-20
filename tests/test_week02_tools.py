@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
 import student_parts.week02_structure_natural_language_requests as week02_module
 from fixed.config import CONFIG
+from fixed.langchain_trace import extract_final_text
 
 
-def test_week02_private_meeting_does_not_default_to_external_members(monkeypatch) -> None:
+def test_week02_preserves_llm_structured_output_without_private_default(monkeypatch) -> None:
     def fake_extract_structured_request(query: str) -> week02_module.StructuredRequest:
         return week02_module.StructuredRequest(
             kind="group_schedule",
@@ -28,8 +30,9 @@ def test_week02_private_meeting_does_not_default_to_external_members(monkeypatch
     )
     structured = result["structured_request"]
 
-    assert structured["kind"] == "personal_schedule"
-    assert structured["members"] == ["나"]
+    assert structured["kind"] == "group_schedule"
+    assert structured["members"] == ["철수", "영희"]
+    assert structured["reason"] == "잘못 추측된 기본 외부 팀원"
 
 
 def test_week02_explicit_external_team_keeps_default_external_members(monkeypatch) -> None:
@@ -52,6 +55,45 @@ def test_week02_explicit_external_team_keeps_default_external_members(monkeypatc
 
     assert structured["kind"] == "group_schedule"
     assert structured["members"] == ["철수", "영희"]
+
+
+def test_week02_agent_uses_structured_response_format(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    fake_agent = object()
+
+    def fake_create_agent(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return fake_agent
+
+    monkeypatch.setattr(week02_module, "CONFIG", SimpleNamespace(has_openai_key=True))
+    monkeypatch.setattr(week02_module, "chat_model", lambda: "fake-model")
+    monkeypatch.setattr(week02_module, "create_agent", fake_create_agent)
+    monkeypatch.setattr(week02_module, "_WEEK02_AGENT", None)
+
+    agent = week02_module.build_week02_agent()
+
+    assert agent is fake_agent
+    assert captured["response_format"] is week02_module.StructuredRequest
+    assert captured["tools"] == []
+
+
+def test_structured_response_renders_as_class_info() -> None:
+    structured = week02_module.StructuredRequest(
+        kind="personal_schedule",
+        title="개인 집중 작업",
+        date="2026-05-21",
+        start_time="10:00",
+        end_time="11:00",
+        members=[],
+        reason="테스트 구조화",
+        original_text="2026-05-21 오전 10시에 개인 집중 작업 일정 잡아줘",
+    )
+
+    text = extract_final_text({"messages": [], "structured_response": structured})
+
+    assert text.startswith("StructuredRequest(")
+    assert "kind='personal_schedule'" in text
+    assert "title='개인 집중 작업'" in text
 
 
 @pytest.mark.integration

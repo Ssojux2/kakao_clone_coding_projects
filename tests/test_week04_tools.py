@@ -6,7 +6,57 @@ from uuid import uuid4
 import pytest
 
 import student_parts.week04_retrieve_nanas_memory as week04_module
+from fixed.app_store import AppSQLiteStore
 from fixed.config import CONFIG
+
+
+def test_week04_search_saved_requests_returns_empty_rows_without_recent_fallback(tmp_path, monkeypatch) -> None:
+    store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    store.save_structured_request(
+        {
+            "kind": "todo",
+            "title": "검색되면 안 되는 최근 할 일",
+            "date": "2026-05-20",
+            "priority": "low",
+            "reason": "fallback 방지 테스트",
+        }
+    )
+    monkeypatch.setattr(week04_module, "SQLITE_STORE", store)
+
+    result = json.loads(week04_module.search_saved_requests.invoke({"query": "절대없는검색어", "top_k": 3}))
+
+    assert result["rows"] == []
+
+
+def test_week04_search_conversation_messages_finds_app_chat_messages(tmp_path, monkeypatch) -> None:
+    store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    source_conversation_id = store.create_conversation("양 정보")["conversation_id"]
+    store.append_message(source_conversation_id, "user", "내가 가지고 있는 양은 검은색 양이다.")
+    store.append_message(source_conversation_id, "assistant", "검은색 양으로 기억해둘게요.")
+    current_conversation_id = store.create_conversation("양 색 질문")["conversation_id"]
+    store.append_message(current_conversation_id, "user", "내가 가지고 있는 양의 색은?")
+    store.append_message(
+        current_conversation_id,
+        "assistant",
+        "양의 색에 대해 구체적으로 어떤 정보를 원하시는지 알려주세요.",
+    )
+    monkeypatch.setattr(week04_module, "SQLITE_STORE", store)
+
+    saved_result = json.loads(week04_module.search_saved_requests.invoke({"query": "양", "top_k": 5}))
+    message_result = json.loads(
+        week04_module.search_conversation_messages.invoke(
+            {"query": "양", "top_k": 5}
+        )
+    )
+
+    assert saved_result["rows"] == []
+    assert message_result["rows"][0]["content"] == "내가 가지고 있는 양은 검은색 양이다."
+    assert any(
+        row["conversation_id"] == source_conversation_id
+        and row["role"] == "user"
+        and row["content"] == "내가 가지고 있는 양은 검은색 양이다."
+        for row in message_result["rows"]
+    )
 
 
 @pytest.mark.integration

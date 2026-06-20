@@ -7,11 +7,15 @@ import fixed.runtime_clock as runtime_clock
 import student_parts.week03_build_nanas_logbook as week03_module
 from fixed.app_store import AppSQLiteStore
 from golden_cases import GOLDEN_CASES, find_case_by_input, harness_prompt_examples, sample_prompts
-from student_parts.week01_wake_up_nana import PERSONAL_SCHEDULES, personal_create_schedule, week01_tools
-from student_parts.week02_structure_natural_language_requests import week02_tools
-from student_parts.week03_build_nanas_logbook import delete_saved_schedules_dict, week03_tools
-from student_parts.week04_retrieve_nanas_memory import week04_tools
-from student_parts.week05_load_kanas_past_conversations import extract_schedules_from_history, week05_tools
+from student_parts.week01_wake_up_nana import PERSONAL_SCHEDULES, personal_create_schedule, week01_system_prompt, week01_tools
+from student_parts.week02_structure_natural_language_requests import week02_system_prompt, week02_tools
+from student_parts.week03_build_nanas_logbook import delete_saved_schedules_dict, week03_system_prompt, week03_tools
+from student_parts.week04_retrieve_nanas_memory import week04_system_prompt, week04_tools
+from student_parts.week05_load_kanas_past_conversations import (
+    extract_schedules_from_history,
+    week05_system_prompt,
+    week05_tools,
+)
 from student_parts.week06_kanamate_decides_schedule import (
     agent_tool_names,
     find_common_available_slots_dict,
@@ -33,19 +37,6 @@ def test_prompt_harness_is_the_shared_reference() -> None:
     assert find_case_by_input(GOLDEN_CASES[0]["input"]) == GOLDEN_CASES[0]
 
 
-def test_harness_prompts_are_embedded_in_agent_prompts() -> None:
-    supervisor_prompt = supervisor_system_prompt()
-    nana_prompt = nana_system_prompt()
-    kana_prompt = kana_system_prompt()
-
-    for case in GOLDEN_CASES:
-        assert case["input"] in supervisor_prompt
-        if case["expected_agent"] == "nana_agent":
-            assert case["input"] in nana_prompt
-        else:
-            assert case["input"] in kana_prompt
-
-
 def test_expected_tools_are_exposed_to_prompt_driven_agents() -> None:
     supervisor_tools = set(agent_tool_names("supervisor"))
     nana_tools = set(agent_tool_names("nana_agent"))
@@ -57,14 +48,63 @@ def test_expected_tools_are_exposed_to_prompt_driven_agents() -> None:
     assert "personal_update_saved_schedule" in nana_tools
     assert "search_personal_references" in nana_tools
     assert "search_saved_requests" in nana_tools
+    assert "search_conversation_messages" in nana_tools
     assert "extract_schedule_request" in kana_tools
     assert "collect_member_schedules" in kana_tools
+    assert "find_common_available_slots" in kana_tools
     assert "decide_final_slot" in kana_tools
+    assert "personal_delete_schedule_by_query" not in nana_tools
 
     for case in GOLDEN_CASES:
         expected_tools = case.get("expected_tools") or [case["expected_tool"]]
         target_tools = nana_tools if case["expected_agent"] == "nana_agent" else kana_tools
         assert set(expected_tools) <= target_tools
+
+
+def test_concrete_group_meeting_registration_routes_to_nana_storage() -> None:
+    week05_prompt = week05_system_prompt()
+    supervisor_prompt = supervisor_system_prompt()
+    nana_prompt = nana_system_prompt()
+    kana_prompt = kana_system_prompt()
+
+    assert "참석자가 있어도 외부 일정 조율이 아니라 앱 DB 일정 저장 요청" in week05_prompt
+    assert "structured_request를 save_structured_request에 전달해 저장" in week05_prompt
+    assert "참석자가 있어도 일정 저장 요청이므로 nana_agent" in supervisor_prompt
+    assert "kind가 personal_schedule이든 group_schedule이든" in nana_prompt
+    assert "Nana 저장 담당" in kana_prompt
+
+
+def test_week3_plus_prompts_use_sqlite_directly_for_create_and_lookup() -> None:
+    prompts = [
+        week03_system_prompt(),
+        week04_system_prompt(),
+        week05_system_prompt(),
+        nana_system_prompt(),
+        supervisor_system_prompt(),
+    ]
+
+    for prompt in prompts:
+        assert "SQLite" in prompt
+        assert "personal_list_schedules" in prompt
+
+    assert "personal_create_schedule을 거치지 않고" in prompts[0]
+    assert "personal_create_schedule을 새 일정 저장용으로 사용하지 않는다" in prompts[1]
+    assert "personal_create_schedule은 Week 1-2 임시 메모리용" in prompts[2]
+    assert "personal_create_schedule을 거쳐 저장하지 않는다" in prompts[3]
+    assert "단순 일정 조회에 personal_list_schedules 같은 Week 1-2 인메모리 조회를 사용하지 않는다" in prompts[4]
+    assert "Week 1-2 단순 조회 전용" in prompts[0]
+
+
+def test_week_system_prompts_accumulate_previous_weeks() -> None:
+    assert "현재 채팅 기억" in week01_system_prompt()
+    assert "Week 2 요청 구조화 agent" in week02_system_prompt()
+    assert "StructuredRequest" in week02_system_prompt()
+    assert "Week 2 요청 구조화 agent" in week03_system_prompt()
+    assert "최종 답변은 자연어" in week03_system_prompt()
+    assert "앱 SQLite DB에 저장된 일정" in week03_system_prompt()
+    assert "Week 3 Nana logbook agent" in week04_system_prompt()
+    assert "Week 4 Nana memory agent" in week05_system_prompt()
+    assert "Week 5 Kana history agent" in supervisor_system_prompt()
 
 
 def test_week_tool_lists_accumulate_previous_weeks() -> None:
@@ -75,12 +115,13 @@ def test_week_tool_lists_accumulate_previous_weeks() -> None:
     week5 = _tool_names(week05_tools())
 
     assert week1 == {"personal_create_schedule", "personal_list_schedules", "personal_delete_schedule"}
-    assert week1 <= week2
-    assert "extract_schedule_request" in week2
-    assert week2 <= week3
+    assert week2 == set()
+    assert week1 <= week3
+    assert "extract_schedule_request" in week3
     assert {"save_structured_request", "list_saved_requests", "get_saved_request", "personal_update_saved_schedule"} <= week3
+    assert "personal_delete_schedule_by_query" not in week3
     assert week3 <= week4
-    assert {"add_personal_reference", "search_personal_references", "search_saved_requests"} <= week4
+    assert {"add_personal_reference", "search_personal_references", "search_saved_requests", "search_conversation_messages"} <= week4
     assert week4 <= week5
     assert {
         "search_previous_conversations",
@@ -90,7 +131,7 @@ def test_week_tool_lists_accumulate_previous_weeks() -> None:
     } <= week5
 
 
-def test_week1_create_schedule_returns_db_ready_structured_output(tmp_path) -> None:
+def test_week1_create_schedule_returns_memory_only_payload() -> None:
     PERSONAL_SCHEDULES.clear()
 
     result = json.loads(
@@ -105,18 +146,12 @@ def test_week1_create_schedule_returns_db_ready_structured_output(tmp_path) -> N
         )
     )
 
-    structured = result["structured_request"]
-    assert structured["kind"] == "personal_schedule"
-    assert structured["title"] == "개인 코칭"
-    assert structured["source_schedule_id"] == result["created_schedule"]["id"]
-
-    store = AppSQLiteStore(tmp_path / "app.sqlite3")
-    saved = store.save_structured_request(structured)
-    schedules = store.list_schedules()
-
-    assert saved["kind"] == "personal_schedule"
-    assert schedules[0]["title"] == "개인 코칭"
-    assert schedules[0]["attendees"] == ["나"]
+    schedule = result["created_schedule"]
+    assert result["tool_name"] == "personal_create_schedule"
+    assert "structured_request" not in result
+    assert schedule["title"] == "개인 코칭"
+    assert schedule["attendees"] == ["나"]
+    assert schedule["id"].startswith("personal_")
 
 
 def test_delete_saved_schedules_requires_filter_unless_delete_all(tmp_path) -> None:
@@ -228,63 +263,8 @@ def test_delete_saved_schedules_delete_all_removes_rows(tmp_path) -> None:
     assert store.list_schedules(limit=20) == []
 
 
-def test_delete_schedule_by_query_uses_structured_fields_without_regex(tmp_path, monkeypatch) -> None:
-    class FakeStructuredRequest:
-        def model_dump(self) -> dict[str, object]:
-            return {
-                "kind": "group_schedule",
-                "title": "팀 회의",
-                "date": "2026-05-18",
-                "start_time": "15:00",
-                "end_time": "16:00",
-                "members": ["민준", "서연"],
-                "priority": None,
-                "reason": "테스트 구조화 결과",
-                "original_text": "팀 회의 삭제해줘",
-            }
-
-    store = AppSQLiteStore(tmp_path / "app.sqlite3")
-    store.save_structured_request(
-        {
-            "kind": "group_schedule",
-            "title": "팀 회의",
-            "date": "2026-05-18",
-            "start_time": "15:00",
-            "end_time": "16:00",
-            "members": ["민준", "서연"],
-            "reason": "삭제 대상",
-            "original_text": "5월 18일 팀 회의 잡아줘",
-        }
-    )
-    store.save_structured_request(
-        {
-            "kind": "group_schedule",
-            "title": "팀 회의",
-            "date": "2026-05-19",
-            "start_time": "15:00",
-            "end_time": "16:00",
-            "members": ["민준", "서연"],
-            "reason": "남아야 하는 일정",
-            "original_text": "5월 19일 팀 회의 잡아줘",
-        }
-    )
-    monkeypatch.setattr(week03_module, "extract_structured_request", lambda query: FakeStructuredRequest())
-
-    result = week03_module.delete_schedule_by_query_dict("팀 회의 삭제해줘", app_store=store)
-    remaining = store.list_schedules(limit=20)
-
-    assert result["tool_name"] == "personal_delete_schedule_by_query"
-    assert result["structured_request"]["title"] == "팀 회의"
-    assert result["deleted_count"] == 1
-    assert result["filters"] == {
-        "schedule_ids": None,
-        "date": "2026-05-18",
-        "title": "팀 회의",
-        "start_time": "15:00",
-        "time_unspecified": False,
-    }
-    assert len(remaining) == 1
-    assert remaining[0]["date"] == "2026-05-19"
+def test_delete_by_natural_language_compatibility_tool_is_not_public() -> None:
+    assert "personal_delete_schedule_by_query" not in _tool_names(week03_tools())
 
 
 def test_week6_common_slot_calculation_uses_busy_rows() -> None:

@@ -28,7 +28,7 @@
 
 학습 목표는 한국어 자연어 입력을 앱이 처리할 수 있는 구조로 바꾸는 것입니다. `StructuredRequest`를 request schema로 보고, `kind`, `title`, `date`, `start_time`, `end_time`, `members`, `priority`, `reason`, `original_text` 필드가 왜 필요한지 확인합니다.
 
-`structured_output_system_prompt`에서는 상대 날짜 기준, 요청 종류, 날짜/시간 형식, 애매한 필드 처리 규칙을 자연어 prompt로 작성합니다. `week02_system_prompt`는 Week 1 개인 일정 tool과 Week 2 구조화 tool을 어떤 조건에서 선택할지 정의합니다. `build_langchain_structured_agent`에서는 `response_format=StructuredRequest`를 넘겨 LLM structured output 경로를 구성합니다. `extract_schedule_request`는 사용자 prompt를 받아 `base_date`와 `structured_request`가 들어 있는 JSON payload를 반환합니다.
+`structured_output_system_prompt`에서는 상대 날짜 기준, 요청 종류, 날짜/시간 형식, 애매한 필드 처리 규칙을 자연어 prompt로 작성합니다. `week02_system_prompt`는 Week 2 대화가 tool 호출 없이 `StructuredRequest`를 최종 structured output으로 반환하도록 정의합니다. `build_week02_agent`에서는 `response_format=StructuredRequest`를 넘겨 LLM structured output 경로를 구성합니다. `extract_schedule_request`는 Week 3 이상에서 DB 저장 tool chain에 재사용할 수 있도록 사용자 prompt를 `base_date`와 `structured_request`가 들어 있는 JSON payload로 감쌉니다.
 
 검증 포인트는 `내일`, `다음 주`, `오후 3시`, `팀원 A/B/C` 같은 표현이 schema 필드로 어떻게 들어가는지 비교하고, 조건문 parser가 아니라 LangChain/OpenAI structured output 결과와 Pydantic 검증이 맞물리는지 확인하는 것입니다.
 
@@ -36,11 +36,11 @@
 
 ### 미션: structured request 저장/조회와 저장 일정 삭제 흐름 확인
 
-학습 목표는 in-memory store와 persistent storage의 차이를 이해하는 것입니다. Week 2의 structured payload가 `structured_requests`에 저장되고, `kind`에 따라 `schedules`, `todos`, `reminders`에 정규화되는 흐름을 봅니다.
+학습 목표는 in-memory store와 persistent storage의 차이를 이해하는 것입니다. Week 2에서 대화의 최종 출력으로 확인했던 structured payload를 Week 3에서는 도구 결과로 만든 뒤 `structured_requests`에 저장하고, `kind`에 따라 `schedules`, `todos`, `reminders`에 정규화되는 흐름을 봅니다.
 
 `week03_system_prompt`는 구조화, 저장, 조회, 수정, 삭제 tool chain을 선택하는 규칙을 정의합니다. `save_structured_request`에서는 payload를 SQLite store에 저장하고 저장 결과를 JSON으로 반환합니다. `list_saved_requests`에서는 `kind`, `date_from`, `date_to` 필터가 SQL 조회 조건으로 반영됩니다. `get_saved_request`에서는 `request_id`로 단일 row를 조회합니다.
 
-저장된 개인 일정 삭제 흐름도 함께 확인합니다. `personal_list_saved_schedules`는 앱 DB의 일정 후보를 보여주고, `personal_delete_saved_schedules`는 `schedule_ids`, 날짜, 제목, 시간, 전체 삭제 여부 같은 필터로 저장 일정을 삭제합니다. `personal_delete_schedule_by_query`는 사용자 문장을 `extract_structured_request`로 구조화한 뒤 삭제 필터로 바꾸는 compatibility helper라서 동작은 확인하되 학생 핵심 구현 대상에서는 제외합니다.
+저장된 개인 일정 삭제 흐름도 함께 확인합니다. `personal_list_saved_schedules`는 앱 DB의 일정 후보를 보여주고, `personal_delete_saved_schedules`는 `schedule_ids`, 날짜, 제목, 시간, 전체 삭제 여부 같은 필터로 저장 일정을 삭제합니다. 자연어 삭제 판단은 agent가 후보 목록을 본 뒤 명시적인 삭제 tool 인자로 넘기도록 둡니다.
 
 검증 포인트는 같은 입력을 여러 번 저장했을 때 request id와 row가 어떻게 달라지는지, 삭제 payload의 `deleted_count`, `filters`, `deleted`가 어떤 의미를 갖는지 확인하는 것입니다.
 
@@ -78,11 +78,11 @@
 
 학습 목표는 multi-agent routing을 역할 분리로 이해하는 것입니다. `nana_agent`는 개인 일정, 저장, 개인 RAG 흐름을 담당하고, `kana_agent`는 여러 사람의 일정 조율을 담당합니다.
 
-`nana_system_prompt`, `kana_system_prompt`, `supervisor_system_prompt`는 각 agent가 어떤 tool chain을 고르는지 안내합니다. `nana_tools`는 Week 4까지의 개인 도구를 공개하고, `kana_tools`는 `extract_schedule_request`, 외부 대화 검색, 멤버 일정 수집, `decide_final_slot`을 공개합니다. `supervisor_tools`는 `nana_agent`, `kana_agent` 위임 도구만 노출합니다.
+`nana_system_prompt`, `kana_system_prompt`, `supervisor_system_prompt`는 각 agent가 어떤 tool chain을 고르는지 안내합니다. `nana_tools`는 Week 4까지의 개인 도구를 공개하고, `kana_tools`는 `extract_schedule_request`, 외부 대화 검색, 멤버 일정 수집, `find_common_available_slots`, `decide_final_slot`을 공개합니다. `supervisor_tools`는 `nana_agent`, `kana_agent` 위임 도구만 노출합니다.
 
-`kana_agent`는 외부 대화와 멤버 일정을 확인한 뒤 `decide_final_slot`을 호출합니다. `decide_final_slot`은 기존 공통 시간 계산 helper를 재사용해 후보가 비어 있으면 직접 후보를 계산하고, 최종 `final_slot`, `reason`, `candidates` payload를 반환합니다.
+`kana_agent`는 외부 대화와 멤버 일정을 확인한 뒤 `find_common_available_slots`로 후보를 계산하고, 선택한 후보를 `decide_final_slot`에 명시해 최종 `final_slot`, `reason`, `candidates` payload를 반환합니다.
 
-검증 포인트는 supervisor trace에서 어떤 agent가 선택됐는지, 하위 agent trace에 `search_previous_conversations`, `extract_schedules_from_history`, `decide_final_slot`이 어떤 순서로 호출됐는지, 최종 payload의 `final_slot`, `reason`, `candidates`가 도구 결과와 일치하는지 확인하는 것입니다.
+검증 포인트는 supervisor trace에서 어떤 agent가 선택됐는지, 하위 agent trace에 `search_previous_conversations`, `extract_schedules_from_history`, `find_common_available_slots`, `decide_final_slot`이 어떤 순서로 호출됐는지, 최종 payload의 `final_slot`, `reason`, `candidates`가 도구 결과와 일치하는지 확인하는 것입니다.
 
 ## 주차별 미션 진행 템플릿
 
@@ -101,8 +101,8 @@
 
 ## 강사용 준비물
 
-- 강사용 기준본은 실제 OpenAI/SQLite/ChromaDB 경로가 동작하는 완성본으로 유지하고, 학생용 배포본은 `./run.sh --make-student-copy`로 생성합니다.
-- 학생용 배포본에서는 `student_parts/`의 주차별 핵심 `@tool` 함수 구현부만 `NotImplementedError` TODO로 바뀌며, 각 TODO tool 본문 하나가 구현 단위가 됩니다.
+- 강사용 기준본은 실제 OpenAI/SQLite/ChromaDB 경로가 동작하는 완성본으로 유지하고, 학생용 repo와 Week 1-6 branch는 별도로 관리합니다.
+- 학생용 branch에서는 `student_parts/`의 주차별 핵심 `@tool` 함수 구현부가 각 실습의 구현 단위가 됩니다.
 - 수업 전 `./run.sh --test`로 기준본의 오프라인 검증이 통과하는지 확인합니다.
 - Week 2와 Week 4의 실제 structured output/embedding 검증은 프록시 서버를 통해 모델 API를 호출하므로, 수업 전 `.env`의 `PROXY_TOKEN`을 확인한 뒤 `./run.sh --integration-test`를 실행합니다.
 - Week 3 이후에는 DB row가 누적될 수 있으므로 수업용 DB를 초기화하거나 복사본을 준비합니다.

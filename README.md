@@ -42,21 +42,7 @@ KANANA_USE_LLM=1
 KANANA_LLM_ASSIST=1
 ```
 
-메인 채팅 화면의 LLM agent 실행은 `PROXY_TOKEN`이 있어야 동작합니다. 채팅은 `CHAT_PROXY_URL`, 임베딩은 `EMBEDDING_PROXY_URL`을 사용합니다. 메인 런타임은 UI 입력과 대화 저장만 담당하고, `KANANA_ACTIVE_WEEK`로 선택된 `student_parts` 주차 agent를 호출합니다. Week 1-5는 각 주차의 단일 agent가 누적 tool 목록을 직접 선택하고, Week 6은 supervisor prompt가 `nana_agent` 또는 `kana_agent` tool로 위임합니다. Week 2 structured output tool은 조건문 분류기 없이 LangChain/OpenAI structured output 경로를 사용합니다.
-
-### 학생용 배포본 만들기
-
-강사용 기준본은 모든 주차가 실제로 동작하는 완성본입니다. 학생에게 나눠줄 때는 아래 명령으로 주차별 핵심 `@tool` 함수 구현부만 TODO로 바뀐 복사본을 생성합니다. 학생은 TODO tool 본문 안에서 입력 정리, 저장소/MCP 호출, JSON 반환까지 완성하면 되며 별도 helper 계층을 따라 구현하지 않아도 됩니다. 구현 방법은 각 `student_parts/weekXX_*.py` 파일 최상단의 `[수강생 구현 가이드]`를 기준으로 봅니다.
-
-```bash
-./run.sh --make-student-copy
-```
-
-기본 출력 위치는 `dist/kanana_student`입니다. 다른 위치로 만들고 싶으면 경로를 넘깁니다.
-
-```bash
-./run.sh --make-student-copy /tmp/kanana_student
-```
+메인 채팅 화면의 LLM agent 실행은 `PROXY_TOKEN`이 있어야 동작합니다. 채팅은 `CHAT_PROXY_URL`, 임베딩은 `EMBEDDING_PROXY_URL`을 사용합니다. 메인 런타임은 UI 입력과 대화 저장만 담당하고, `KANANA_ACTIVE_WEEK`로 선택된 `student_parts` 주차 agent를 호출합니다. Week 1-5는 각 주차의 단일 agent가 tool 목록을 직접 선택하고, Week 6은 supervisor prompt가 `nana_agent` 또는 `kana_agent` tool로 위임합니다. Week 2는 조건문 분류기 없이 LangChain/OpenAI structured output 경로로 최종 `StructuredRequest`를 직접 반환합니다.
 
 ### 패키지 관리
 
@@ -83,14 +69,14 @@ conda 환경이 필요한 경우에는 기존 `environment.yml` 기반 runner를
   - 생성 tool은 DB 저장 도구에 바로 넘길 수 있는 `structured_request`를 함께 반환합니다.
   - 검증은 개별 tool을 직접 호출하기보다 하네스 프롬프트를 채팅 런타임에 넣고 LLM이 어떤 tool을 골랐는지 trace를 확인하는 방식이 기본입니다.
 - Week 2: `student_parts/week02_structure_natural_language_requests.py`
-  - `extract_schedule_request`
   - LLM structured output + Pydantic `StructuredRequest`
-  - `week02_tools()`는 Week 1 도구에 `extract_schedule_request`를 누적해 반환합니다.
+  - `build_week02_agent()`는 tool 없이 `response_format=StructuredRequest`로 대화 결과를 바로 구조화합니다.
+  - `extract_schedule_request`는 Week 3 이후 DB 저장 tool chain에서 재사용하는 helper입니다.
 - Week 3: `student_parts/week03_build_nanas_logbook.py`
   - `save_structured_request`, `list_saved_requests`, `get_saved_request`
   - `personal_list_saved_schedules`, `personal_update_saved_schedule`, `personal_delete_saved_schedules`
   - LLM이 저장/조회 의도를 판단하고 SQLite tool로 structured output을 저장/조회
-  - `week03_tools()`는 Week 1-2 도구와 SQLite 저장/조회/삭제 도구를 함께 노출합니다.
+  - `week03_tools()`는 Week 1 도구, Week 2 구조화 helper, SQLite 저장/조회/삭제 도구를 함께 노출합니다.
 - Week 4: `student_parts/week04_retrieve_nanas_memory.py`
   - `add_personal_reference`, `search_personal_references`, `search_saved_requests`
   - LLM이 ChromaDB 개인 참고자료와 SQLite structured data 검색 tool을 조합
@@ -108,10 +94,10 @@ conda 환경이 필요한 경우에는 기존 `environment.yml` 기반 runner를
   - `decide_final_slot`, `nana_agent`, `kana_agent`
   - prompt-driven supervisor, `nana_agent`, `kana_agent`, tool 기반 sub-agent
   - Week 6 파일은 이전 주차 구현을 다시 작성하지 않고 Week 1-5 도구를 import해 sub-agent tool 목록을 조립합니다.
-  - `decide_final_slot`이 course repo 기준 최종 `final_slot`, `reason`, `candidates` payload를 반환합니다.
-  - 기존 `find_common_available_slots`와 `propose_group_schedule`은 compatibility helper로 남겨 기능을 유지합니다.
+  - `find_common_available_slots`가 후보를 계산하고, `decide_final_slot`은 agent가 명시한 선택을 최종 `final_slot`, `reason`, `candidates` payload로 반환합니다.
+  - 기존 `propose_group_schedule`은 compatibility helper로 남겨 기능을 유지합니다.
 
-강사용 기준본은 실행 가능한 구현을 담고 있습니다. 학생용 배포본은 `scripts/make_student_distribution.py`가 주차별 핵심 `@tool` 함수 구현부만 `NotImplementedError` TODO로 바꿉니다. prompt, schema, tool-list, agent builder, MCP server 함수는 연결 구조를 읽는 참고 코드로 남기고, 학생 구현은 TODO tool 본문 하나에서 끝나도록 유지합니다.
+강사용 기준본은 실행 가능한 구현을 담고 있습니다. 학생용 실습 repo와 Week 1-6 branch는 별도로 관리합니다. 학생 구현 범위는 각 `student_parts/weekXX_*.py` 파일 최상단의 `[수강생 구현 가이드]`를 기준으로 봅니다.
 
 ## 검증
 

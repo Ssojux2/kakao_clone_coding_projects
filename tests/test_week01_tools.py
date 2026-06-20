@@ -30,7 +30,8 @@ def test_week01_personal_schedule_crud_flow() -> None:
     listed = json.loads(personal_list_schedules.invoke({"date_from": "2026-05-21", "date_to": "2026-05-21"}))
     deleted = json.loads(personal_delete_schedule.invoke({"schedule_id": schedule_id}))
 
-    assert created["structured_request"]["kind"] == "personal_schedule"
+    assert "structured_request" not in created
+    assert created["created_schedule"]["title"] == "개인 집중 작업"
     assert listed["schedules"][0]["title"] == "개인 집중 작업"
     assert deleted["deleted"] is True
 

@@ -33,7 +33,7 @@ def test_week05_external_store_refreshes_stale_demo_schedules(tmp_path) -> None:
 
     refreshed = ExternalPeopleSQLiteStore(db_path)
     rows = refreshed.extract_schedules_from_history(
-        member_names=[],
+        member_names=["철수", "영희"],
         date_from=runtime_clock.next_weekday_iso(1),
         date_to=runtime_clock.next_weekday_iso(3),
     )
@@ -55,7 +55,7 @@ def test_week05_mcp_stdio_server_loads_tools_and_returns_current_schedules(tmp_p
         }
         result = await tools["extract_schedules_from_history"].ainvoke(
             {
-                "member_names": [],
+                "member_names": ["철수", "영희"],
                 "date_from": runtime_clock.next_weekday_iso(1),
                 "date_to": runtime_clock.next_weekday_iso(3),
             }
@@ -299,7 +299,7 @@ def test_week05_mcp_stdio_server_returns_cheolsu_younghee_schedules(tmp_path) ->
     assert f"{runtime_clock.next_weekday_iso(3)} 16:00-17:00" in payload["schedule_summary"]
 
 
-def test_week05_default_external_lookup_expands_next_tuesday_to_thursday(tmp_path) -> None:
+def test_week05_external_lookup_keeps_requested_single_day(tmp_path) -> None:
     async def run() -> dict[str, object]:
         tools = {
             tool.name: tool
@@ -316,13 +316,9 @@ def test_week05_default_external_lookup_expands_next_tuesday_to_thursday(tmp_pat
 
     payload = asyncio.run(run())
 
-    assert len(payload["rows"]) == 5
-    assert {row["member_name"] for row in payload["rows"]} == {"철수", "영희"}
-    assert {row["date"] for row in payload["rows"]} == {
-        runtime_clock.next_weekday_iso(1),
-        runtime_clock.next_weekday_iso(2),
-        runtime_clock.next_weekday_iso(3),
-    }
+    assert len(payload["rows"]) == 1
+    assert payload["rows"][0]["member_name"] == "철수"
+    assert payload["rows"][0]["date"] == runtime_clock.next_weekday_iso(1)
 
 
 def test_week05_sync_mcp_helper_works_inside_running_event_loop(tmp_path) -> None:
@@ -354,23 +350,20 @@ def test_week05_external_history_tools_return_member_schedules() -> None:
     )
 
     assert conversations["rows"][0]["member_name"] == "철수"
-    assert {row["member_name"] for row in schedules["rows"]} == {"철수", "영희"}
+    assert schedules["rows"] == []
 
 
-def test_week05_collect_member_schedules_uses_default_external_members() -> None:
+def test_week05_collect_member_schedules_keeps_empty_external_members() -> None:
     result = json.loads(
         week05_module.collect_member_schedules.invoke(
             {"member_names": [], "date_from": "2000-01-01", "date_to": "2999-12-31"}
         )
     )
 
-    assert result["members"] == ["나", "철수", "영희"]
-    assert {row["member_name"] for row in result["rows"] if row["member_name"] != "나"} == {"철수", "영희"}
-    assert "철수 | 영업 미팅 |" in result["schedule_summary"]
-    assert "영희 | 마케팅 싱크 |" in result["schedule_summary"]
-    assert "15:00-16:00" in result["schedule_summary"]
-    assert "영희 | 콘텐츠 점검 |" in result["schedule_summary"]
-    assert "16:00-17:00" in result["schedule_summary"]
+    assert result["members"] == ["나"]
+    assert [row for row in result["rows"] if row["member_name"] != "나"] == []
+    assert "철수 |" not in result["schedule_summary"]
+    assert "영희 |" not in result["schedule_summary"]
 
 
 def test_week05_collect_member_schedules_reads_saved_sqlite_not_other_chat_memory(tmp_path, monkeypatch) -> None:

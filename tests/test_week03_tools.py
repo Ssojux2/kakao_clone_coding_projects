@@ -7,7 +7,8 @@ from uuid import uuid4
 import student_parts.week03_build_nanas_logbook as week03_module
 from fixed.app_store import AppSQLiteStore
 from fixed.session_scope import conversation_session_scope
-from fixed.student_api import save_structured_request_payload
+from student_parts.week01_wake_up_nana import PERSONAL_SCHEDULES
+from student_parts.week03_build_nanas_logbook import save_structured_request_payload
 
 
 def test_week03_structured_request_persists_to_sqlite() -> None:
@@ -30,7 +31,7 @@ def test_week03_structured_request_persists_to_sqlite() -> None:
     assert any(item["request_id"] == saved["request_id"] for item in rows)
 
 
-def test_week03_save_defaults_unmentioned_meeting_to_private_schedule(tmp_path) -> None:
+def test_week03_save_preserves_llm_kind_and_members(tmp_path) -> None:
     store = AppSQLiteStore(tmp_path / "app.sqlite3")
     saved = save_structured_request_payload(
         {
@@ -47,9 +48,9 @@ def test_week03_save_defaults_unmentioned_meeting_to_private_schedule(tmp_path) 
     )
     rows = store.list_schedules(limit=10)
 
-    assert saved["kind"] == "personal_schedule"
-    assert rows[0]["request_kind"] == "personal_schedule"
-    assert rows[0]["attendees"] == ["나"]
+    assert saved["kind"] == "group_schedule"
+    assert rows[0]["request_kind"] == "group_schedule"
+    assert rows[0]["attendees"] == ["철수", "영희"]
 
 
 def test_week03_saved_schedules_are_visible_from_new_chat_scope(tmp_path, monkeypatch) -> None:
@@ -72,3 +73,105 @@ def test_week03_saved_schedules_are_visible_from_new_chat_scope(tmp_path, monkey
 
     assert listed["tool_name"] == "personal_list_saved_schedules"
     assert listed["schedules"][0]["title"] == "SQLite 장기 기억 일정"
+
+
+def test_week03_personal_create_schedule_also_persists_to_sqlite(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "app.sqlite3"
+    monkeypatch.setattr(week03_module, "CONFIG", replace(week03_module.CONFIG, app_db_path=db_path))
+
+    with conversation_session_scope("same_chat"):
+        created = json.loads(
+            week03_module.personal_create_schedule.invoke(
+                {
+                    "title": "내일 미팅",
+                    "date": "2026-06-21",
+                    "start_time": "10:00",
+                    "end_time": "미정",
+                    "attendees": ["나"],
+                }
+            )
+        )
+        listed = json.loads(week03_module.personal_list_saved_schedules.invoke({"limit": 10}))
+
+    schedules = AppSQLiteStore(db_path).list_schedules(limit=10)
+
+    assert created["tool_name"] == "personal_create_schedule"
+    assert created["sqlite_save"]["tool_name"] == "save_structured_request"
+    assert created["sqlite_save"]["saved_rows"][1]["table"] == "schedules"
+    assert listed["schedules"][0]["title"] == "내일 미팅"
+    assert schedules[0]["date"] == "2026-06-21"
+    assert schedules[0]["start_time"] == "10:00"
+
+
+def test_week03_personal_schedule_survives_restart_memory_reset(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "app.sqlite3"
+    monkeypatch.setattr(week03_module, "CONFIG", replace(week03_module.CONFIG, app_db_path=db_path))
+    PERSONAL_SCHEDULES.clear()
+
+    with conversation_session_scope("before_restart"):
+        created = json.loads(
+            week03_module.personal_create_schedule.invoke(
+                {
+                    "title": "재시작 후 확인할 개인 일정",
+                    "date": "2026-06-25",
+                    "start_time": "09:30",
+                    "end_time": "10:00",
+                    "attendees": ["나"],
+                }
+            )
+        )
+
+    PERSONAL_SCHEDULES.clear()
+    fresh_store_after_restart = AppSQLiteStore(db_path)
+
+    with conversation_session_scope("after_restart"):
+        listed = json.loads(week03_module.personal_list_saved_schedules.invoke({"limit": 10}))
+
+    assert fresh_store_after_restart.list_schedules(limit=10)[0]["title"] == "재시작 후 확인할 개인 일정"
+    assert listed["schedules"][0]["schedule_id"] == created["created_schedule"]["id"]
+    assert listed["schedules"][0]["start_time"] == "09:30"
+
+
+def test_week03_date_filtered_lookup_finds_tomorrow_after_many_old_schedules(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "app.sqlite3"
+    monkeypatch.setattr(week03_module, "CONFIG", replace(week03_module.CONFIG, app_db_path=db_path))
+    store = AppSQLiteStore(db_path)
+    for index in range(60):
+        store.save_structured_request(
+            {
+                "kind": "personal_schedule",
+                "title": f"오래된 5월 일정 {index}",
+                "date": "2026-05-21",
+                "start_time": "10:00",
+                "end_time": "11:00",
+                "members": ["나"],
+            }
+        )
+
+    week03_module.save_structured_request.invoke(
+        {
+            "payload": {
+                "kind": "group_schedule",
+                "title": "개발 미팅",
+                "date": "2026-06-21",
+                "start_time": "10:00",
+                "end_time": "11:00",
+                "members": ["나"],
+                "original_text": "내일 오전 10시에 개발 미팅 잡아줘.",
+            }
+        }
+    )
+
+    listed = json.loads(
+        week03_module.personal_list_saved_schedules.invoke(
+            {
+                "limit": 10,
+                "date_from": "2026-06-21",
+                "date_to": "2026-06-21",
+            }
+        )
+    )
+
+    assert listed["filters"]["date_from"] == "2026-06-21"
+    assert [row["title"] for row in listed["schedules"]] == ["개발 미팅"]
+    assert listed["schedules"][0]["request_kind"] == "group_schedule"

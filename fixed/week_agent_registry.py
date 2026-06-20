@@ -70,6 +70,19 @@ def _extract_trace(module: Any, result: dict[str, Any]) -> dict[str, Any]:
     return extract_common_langchain_trace(result)
 
 
+def _structured_response_from_stream_chunk(chunk: Any) -> Any | None:
+    """LangChain stream update chunk에서 structured_response 값을 찾습니다."""
+
+    if not isinstance(chunk, dict):
+        return None
+    if "structured_response" in chunk:
+        return chunk["structured_response"]
+    for value in chunk.values():
+        if isinstance(value, dict) and "structured_response" in value:
+            return value["structured_response"]
+    return None
+
+
 def run_active_week_agent(active_week: int | str | None, messages: list[dict[str, str]]) -> ActiveWeekAgentResult:
     """선택된 주차의 student_parts agent를 실행하고 UI trace payload로 변환합니다.
 
@@ -131,17 +144,23 @@ def stream_active_week_agent(
         return
 
     collected_messages: list[Any] = []
+    structured_response: Any | None = None
     try:
         module = importlib.import_module(WEEK_AGENT_MODULES[week])
         builder = getattr(module, "build_week_agent")
         agent = builder()
         for chunk in agent.stream({"messages": messages}, stream_mode="updates"):
+            chunk_structured_response = _structured_response_from_stream_chunk(chunk)
+            if chunk_structured_response is not None:
+                structured_response = chunk_structured_response
             for message in stream_chunk_messages(chunk):
                 collected_messages.append(message)
                 for tool_name in message_tool_call_names(message):
                     yield ActiveWeekAgentStreamEvent(status_text=f"현재 {tool_name} 실행 중")
 
         result = {"messages": collected_messages}
+        if structured_response is not None:
+            result["structured_response"] = structured_response
         trace = _extract_trace(module, result)
         trace["mode"] = "active_week_agent"
         trace["active_week"] = week

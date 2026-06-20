@@ -142,6 +142,8 @@ def find_common_available_slots_payload(
 def decide_final_slot_payload(
     *,
     candidate_slots: list[Any] | None = None,
+    selected_slot: Any | None = None,
+    selected_index: int | None = None,
     member_names: list[str] | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
@@ -149,11 +151,11 @@ def decide_final_slot_payload(
     reason: str | None = None,
     slot_finder: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """후보 slot 목록에서 최종 회의 시간을 선택하는 payload를 만듭니다.
+    """후보 slot 목록과 LLM agent가 명시한 최종 선택을 payload로 만듭니다.
 
-    이미 후보가 있으면 첫 번째 후보를 사용하고, 후보가 없으면 `slot_finder`로 먼저 계산합니다.
-    반환 payload는 agent 답변과 테스트가 공통으로 쓰는 `final_slot`, `reason`, `candidates`를
-    항상 포함합니다.
+    후보가 없으면 `slot_finder`로 계산할 수 있지만, 최종 slot은 `selected_slot` 또는
+    `selected_index`가 명시됐을 때만 채웁니다. 반환 payload는 agent 답변과 테스트가 공통으로
+    쓰는 `final_slot`, `reason`, `candidates`, `needs_agent_selection`을 항상 포함합니다.
     """
 
     slots = list(candidate_slots or [])
@@ -168,15 +170,31 @@ def decide_final_slot_payload(
         )
         slots = list(computed.get("candidate_slots") or [])
 
-    selected = slots[0] if slots else None
+    selected = selected_slot
+    invalid_selection = False
+    if selected is None and selected_index is not None:
+        try:
+            index = int(selected_index)
+        except (TypeError, ValueError):
+            invalid_selection = True
+        else:
+            if 0 <= index < len(slots):
+                selected = slots[index]
+            else:
+                invalid_selection = True
+
     candidates = [slot_to_text(slot) for slot in slots]
     final_slot = slot_to_text(selected) if selected else None
     if reason:
         final_reason = reason
+    elif invalid_selection:
+        final_reason = "선택한 후보 번호가 후보 목록 범위를 벗어났습니다."
     elif isinstance(selected, dict) and selected.get("reason"):
         final_reason = str(selected["reason"])
     elif selected:
-        final_reason = "내 개인 일정과 팀원 가능 시간이 모두 충돌하지 않는 첫 후보입니다."
+        final_reason = "LLM agent가 후보 목록에서 명시적으로 선택한 시간입니다."
+    elif candidates:
+        final_reason = "후보는 계산됐지만 LLM agent가 최종 후보를 아직 명시적으로 선택하지 않았습니다."
     else:
         final_reason = "공통 가능 시간을 찾지 못했습니다."
 
@@ -184,7 +202,12 @@ def decide_final_slot_payload(
         "final_slot": final_slot,
         "reason": final_reason,
         "candidates": candidates,
+        "needs_agent_selection": bool(candidates and selected is None),
     }
+    if selected_index is not None:
+        payload["selected_index"] = selected_index
+    if selected is not None:
+        payload["selected_slot"] = selected
     if computed:
         payload["members"] = computed.get("members")
         payload["busy_rows"] = computed.get("busy_rows", [])

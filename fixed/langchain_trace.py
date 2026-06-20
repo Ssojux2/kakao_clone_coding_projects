@@ -11,6 +11,32 @@ import json
 from typing import Any
 
 
+def to_jsonable(value: Any) -> Any:
+    """Pydantic model 등 LangChain 결과 객체를 JSON 표시 가능한 값으로 바꿉니다."""
+
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {str(key): to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [to_jsonable(item) for item in value]
+    return str(value)
+
+
+def structured_response_to_text(value: Any) -> str:
+    """structured_response를 최종 답변에 표시할 class/JSON 텍스트로 변환합니다."""
+
+    if value is None:
+        return ""
+    if hasattr(value, "model_dump"):
+        return repr(value)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
 def message_content_to_text(message: Any) -> str:
     """LangChain message나 dict payload에서 최종 답변 텍스트를 꺼냅니다."""
 
@@ -72,6 +98,11 @@ def message_tool_call_names(message: Any) -> list[str]:
 def extract_final_text(result: dict[str, Any]) -> str:
     """LangChain 실행 결과의 마지막 비어 있지 않은 메시지를 최종 답변으로 사용합니다."""
 
+    if isinstance(result, dict) and result.get("structured_response") is not None:
+        text = structured_response_to_text(result["structured_response"])
+        if text:
+            return text
+
     messages = result.get("messages", []) if isinstance(result, dict) else []
     for message in reversed(messages):
         text = message_content_to_text(message)
@@ -117,4 +148,7 @@ def extract_agent_events(result: dict[str, Any]) -> list[dict[str, Any]]:
 def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
     """Week 1-5가 공통으로 쓰는 기본 trace payload를 만듭니다."""
 
-    return {"events": extract_agent_events(result)}
+    trace = {"events": extract_agent_events(result)}
+    if isinstance(result, dict) and result.get("structured_response") is not None:
+        trace["structured_response"] = to_jsonable(result["structured_response"])
+    return trace

@@ -46,14 +46,28 @@ GOLDEN_CASES = [
         "input": "철수 영희와 다음 주 회의 시간을 잡아줘",
         "expected_agent": "kana_agent",
         "expected_tool": "decide_final_slot",
-        "expected_tools": ["search_previous_conversations", "extract_schedules_from_history", "decide_final_slot"],
+        "expected_tools": [
+            "search_previous_conversations",
+            "extract_schedules_from_history",
+            "find_common_available_slots",
+            "decide_final_slot",
+        ],
     },
     {
         "id": "week6_nana_personal",
         "week": 6,
         "input": "2026-05-20 오전 11시에 개인 코칭 일정 잡아줘",
         "expected_agent": "nana_agent",
-        "expected_tool": "personal_create_schedule",
+        "expected_tool": "save_structured_request",
+        "expected_tools": ["extract_schedule_request", "save_structured_request"],
+    },
+    {
+        "id": "week6_nana_group_registration",
+        "week": 6,
+        "input": "내일 10시에 철수랑 개발 미팅 잡아줘",
+        "expected_agent": "nana_agent",
+        "expected_tool": "save_structured_request",
+        "expected_tools": ["extract_schedule_request", "save_structured_request"],
     },
 ]
 
