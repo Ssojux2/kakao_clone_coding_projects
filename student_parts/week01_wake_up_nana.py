@@ -57,36 +57,42 @@ def join_system_prompt(parts: list[str]) -> str:
 #
 # 목표
 #   Nana가 "내 일정 만들어줘/보여줘/지워줘" 같은 개인 일정 요청을 받았을 때
-#   LLM이 직접 고를 수 있는 LangChain tool 3개를 완성합니다.
+#   LLM이 직접 고를 수 있는 LangChain tool 3개를 완성합니다. Week 1의 일정은
+#   앱 DB에 저장하지 않는 현재 대화 전용 임시 메모리입니다.
 #
 # 구현 위치와 사용할 코드
 #   - 이 파일(student_parts/week01_wake_up_nana.py) 안의 @tool 함수 3개를 직접 구현합니다.
 #   - 임시 저장소는 이 파일 상단의 PERSONAL_SCHEDULES 리스트입니다.
 #   - JSON 문자열 반환은 이 파일의 _json(payload) helper를 사용합니다.
 #   - 새 일정 ID는 _new_personal_id(), 생성 시각은 _now_iso()를 사용합니다.
-#   - 현재 채팅 범위 분리는 fixed/session_scope.py의 current_session_scope() 값을 schedule dict에 넣어 처리합니다.
+#   - 현재 채팅 범위 분리는 fixed/session_scope.py의 current_session_scope() 값을
+#     schedule dict의 session_id에 넣고, 조회/삭제 때 같은 session_id만 대상으로 삼아 처리합니다.
 #   - week01_tools()가 세 tool을 LangChain agent에 공개하고, build_week01_agent()가 이 목록을 사용합니다.
 #
 # 구현 대상
 #   1. personal_create_schedule
 #      - title/date/start_time/end_time/attendees 인자로 schedule dict를 만듭니다.
 #      - id는 "personal_" 접두어가 붙은 임시 ID, created_at은 현재 시각으로 채웁니다.
-#      - attendees가 None이면 빈 list로 바꿔 PERSONAL_SCHEDULES에 append합니다.
+#      - attendees가 None이면 빈 list로 바꾸고, session_id=current_session_scope()를 함께 넣어
+#        PERSONAL_SCHEDULES에 append합니다.
 #      - 반환 JSON에는 ok, tool_name, created_schedule을 넣습니다.
+#      - Week 1 반환에는 structured_request나 sqlite_save를 넣지 않습니다.
 #
 #   2. personal_list_schedules
-#      - PERSONAL_SCHEDULES를 직접 수정하지 않고 조회만 합니다.
+#      - PERSONAL_SCHEDULES를 직접 수정하지 않고 현재 대화 범위의 일정만 조회합니다.
 #      - date_from이 있으면 그 날짜 이상, date_to가 있으면 그 날짜 이하만 남깁니다.
+#      - 날짜 비교는 YYYY-MM-DD 문자열 기준으로 충분합니다.
 #      - 반환 JSON에는 ok, tool_name, schedules를 넣습니다.
 #
 #   3. personal_delete_schedule
-#      - schedule_id가 일치하지 않는 일정만 남겨 삭제를 표현합니다.
+#      - schedule_id가 일치하면서 현재 대화 범위에 속한 일정만 삭제합니다.
 #      - 리스트 객체 자체는 유지해야 하므로 PERSONAL_SCHEDULES[:]에 새 목록을 대입합니다.
 #      - 삭제 전후 길이 비교로 deleted 값을 만들고 JSON으로 반환합니다.
+#      - 다른 대화 범위의 같은 ID는 삭제하면 안 됩니다.
 #
 # 중요한 반환 규칙
 #   LangChain tool은 문자열 반환이 가장 안정적입니다. dict를 만든 뒤 _json(...)으로 감싸세요.
-#   Week 1 도구는 현재 대화 안에서만 쓰는 임시 일정 dict만 반환합니다.
+#   Week 1 도구는 현재 대화 안에서만 쓰는 임시 일정 dict만 반환하며 SQLite/App store를 호출하지 않습니다.
 #
 # 참고 코드
 #   week01_system_prompt, week01_tools(), build_week_agent(), trace helper는 구현 대상이 아닙니다.
@@ -96,6 +102,52 @@ def join_system_prompt(parts: list[str]) -> str:
 #   앱을 ./run.sh --week1로 실행하고 채팅에 하네스 프롬프트를 넣습니다.
 #   상세 trace에서 LLM이 personal_create_schedule/list/delete 중 어떤 tool을 골랐는지 확인합니다.
 #   tool 결과 JSON에 created_schedule, schedules, deleted가 있는지도 확인합니다.
+#
+# 함수별 동작 설명
+#   - join_system_prompt(parts)
+#     여러 주차에서 만든 system prompt 조각을 하나의 문자열로 합칩니다. 뒤 주차 지시가 앞 주차 지시보다
+#     우선된다는 공통 헤더를 붙여서, Week 2 이후 파일들이 같은 방식으로 prompt를 누적할 수 있게 합니다.
+#
+#   - _json(payload)
+#     LangChain tool이 반환할 dict를 JSON 문자열로 바꿉니다. ensure_ascii=False를 사용해 한글 답변과
+#     일정 제목이 escape되지 않게 합니다.
+#
+#   - _now_iso()
+#     일정 생성 시각을 timezone이 포함된 ISO 문자열로 만듭니다. 학생 코드에서는 created_at 기록용으로만 사용합니다.
+#
+#   - _new_personal_id()
+#     Week 1 임시 일정에 붙일 짧은 고유 ID를 만듭니다. DB ID가 아니라 현재 Python 프로세스 안에서 쓰는 임시 ID입니다.
+#
+#   - _schedule_scope(schedule)
+#     일정 dict가 어느 대화 범위에 속하는지 읽습니다. 예전 테스트처럼 session_id가 없는 row는 기본 scope로 취급합니다.
+#
+#   - _current_session_schedules()
+#     PERSONAL_SCHEDULES 전체 중 현재 conversation/session 범위에 속한 일정만 골라 반환합니다.
+#
+#   - personal_create_schedule(...)
+#     LLM이 일정 생성이 필요하다고 판단했을 때 호출하는 tool입니다. 입력 인자로 schedule dict를 만들고
+#     PERSONAL_SCHEDULES에 append한 뒤, 생성된 schedule을 JSON 문자열로 반환합니다.
+#
+#   - personal_list_schedules(date_from, date_to)
+#     현재 대화 범위의 임시 일정만 읽고 날짜 범위 필터를 적용합니다. 리스트를 수정하지 않고 조회 결과만 반환합니다.
+#
+#   - personal_delete_schedule(schedule_id)
+#     현재 대화 범위에서 schedule_id가 같은 일정만 제거합니다. 다른 대화 범위의 일정은 같은 ID처럼 보여도 지우지 않습니다.
+#
+#   - week01_tools()
+#     Week 1 agent가 사용할 수 있는 tool 목록을 반환합니다. create_agent(...)가 이 목록을 보고 tool calling을 수행합니다.
+#
+#   - week01_system_prompt() / week01_prompt_parts()
+#     Week 1 agent의 역할, 현재 날짜, tool 사용 규칙을 담은 system prompt를 만듭니다.
+#
+#   - build_week01_agent() / build_week_agent()
+#     LangChain agent를 한 번만 만들고 재사용합니다. build_week_agent()는 실행기에서 공통으로 호출하는 표준 이름입니다.
+#
+#   - list_personal_schedule_dicts(...)
+#     tool이 아닌 내부 helper입니다. 다른 주차 코드가 Week 1 임시 일정을 dict list로 바로 읽어야 할 때 사용합니다.
+#
+#   - ensure_demo_personal_schedule()
+#     데모/테스트에서 빈 일정 저장소를 피하려고 기본 임시 일정을 하나 넣습니다. 이미 일정이 있으면 아무 일도 하지 않습니다.
 
 
 def _json(payload: dict[str, Any]) -> str:
