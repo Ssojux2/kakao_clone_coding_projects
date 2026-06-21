@@ -59,6 +59,14 @@ def join_system_prompt(parts: list[str]) -> str:
 #   Nana가 "내 일정 만들어줘/보여줘/지워줘" 같은 개인 일정 요청을 받았을 때
 #   LLM이 직접 고를 수 있는 LangChain tool 3개를 완성합니다.
 #
+# 구현 위치와 사용할 코드
+#   - 이 파일(student_parts/week01_wake_up_nana.py) 안의 @tool 함수 3개를 직접 구현합니다.
+#   - 임시 저장소는 이 파일 상단의 PERSONAL_SCHEDULES 리스트입니다.
+#   - JSON 문자열 반환은 이 파일의 _json(payload) helper를 사용합니다.
+#   - 새 일정 ID는 _new_personal_id(), 생성 시각은 _now_iso()를 사용합니다.
+#   - 현재 채팅 범위 분리는 fixed/session_scope.py의 current_session_scope() 값을 schedule dict에 넣어 처리합니다.
+#   - week01_tools()가 세 tool을 LangChain agent에 공개하고, build_week01_agent()가 이 목록을 사용합니다.
+#
 # 구현 대상
 #   1. personal_create_schedule
 #      - title/date/start_time/end_time/attendees 인자로 schedule dict를 만듭니다.

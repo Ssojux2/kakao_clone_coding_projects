@@ -8,16 +8,99 @@ Week 5 MCP 서버는 이 저장소를 tool로 감싸고, Week 6은 여기서 나
 """
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 from fixed.config import CONFIG
-from fixed.runtime_clock import app_started_at_iso, next_weekday_iso
+from fixed.runtime_clock import app_started_at_iso
 from fixed.store_base import SQLiteFileStore, new_id
 
 
 EXTERNAL_MEMBER_ALIAS: dict[str, str] = {}
 PERSONAL_SHARED_MEMBER_NAME = "나"
+PARENTHETICAL_TEXT_RE = re.compile(r"\s*[\(（][^()（）]*[\)）]")
+USER_VISIBLE_TEXT_FIELDS = {"member_name", "title", "sender", "content", "notes"}
+JULY_PRACTICE_DATE_FROM = "2026-07-07"
+JULY_PRACTICE_DATE_TO = "2026-07-17"
+JULY_PRACTICE_MEMBER_NAMES = ["철수", "영희", "민준", "서연", "지훈", "하린"]
+JULY_PRACTICE_CONVERSATIONS = [
+    (
+        "ext_cs",
+        "철수",
+        "철수의 일정 공유",
+        "철수: 7월 7일 10시는 API 연동 실습, 7월 9일 14시는 고객 인터뷰, 7월 15일 16시는 QA 리뷰가 있어요.",
+    ),
+    (
+        "ext_yh",
+        "영희",
+        "영희의 일정 공유",
+        "영희: 7월 7일 13시는 디자인 피드백, 7월 10일 10시는 콘텐츠 점검, 7월 16일 15시는 발표 리허설입니다.",
+    ),
+    (
+        "ext_mj",
+        "민준",
+        "민준의 일정 공유",
+        "민준: 7월 8일 9시 30분은 데이터 정리, 7월 9일 11시는 백엔드 리뷰, 7월 14일 15시는 운영 회의가 있어요.",
+    ),
+    (
+        "ext_sy",
+        "서연",
+        "서연의 일정 공유",
+        "서연: 7월 8일 13시 30분은 사용자 테스트, 7월 10일 16시는 보고서 정리, 7월 15일 10시는 UX 워크숍입니다.",
+    ),
+    (
+        "ext_jh",
+        "지훈",
+        "지훈의 일정 공유",
+        "지훈: 7월 7일 15시는 모델 평가, 7월 14일 10시는 보안 점검, 7월 16일 13시는 릴리즈 회의가 있습니다.",
+    ),
+    (
+        "ext_hr",
+        "하린",
+        "하린의 일정 공유",
+        "하린: 7월 8일 11시는 온보딩 세션, 7월 10일 14시는 파트너 콜, 7월 17일 9시는 회고 준비가 있어요.",
+    ),
+]
+JULY_PRACTICE_SCHEDULES = [
+    ("extsch_july_cs_1", "철수", "API 연동 실습", "2026-07-07", "10:00", "11:00", "ext_cs"),
+    ("extsch_july_cs_2", "철수", "고객 인터뷰", "2026-07-09", "14:00", "15:30", "ext_cs"),
+    ("extsch_july_cs_3", "철수", "QA 리뷰", "2026-07-15", "16:00", "17:00", "ext_cs"),
+    ("extsch_july_yh_1", "영희", "디자인 피드백", "2026-07-07", "13:00", "14:00", "ext_yh"),
+    ("extsch_july_yh_2", "영희", "콘텐츠 점검", "2026-07-10", "10:00", "11:30", "ext_yh"),
+    ("extsch_july_yh_3", "영희", "발표 리허설", "2026-07-16", "15:00", "16:00", "ext_yh"),
+    ("extsch_july_mj_1", "민준", "데이터 정리", "2026-07-08", "09:30", "10:30", "ext_mj"),
+    ("extsch_july_mj_2", "민준", "백엔드 리뷰", "2026-07-09", "11:00", "12:00", "ext_mj"),
+    ("extsch_july_mj_3", "민준", "운영 회의", "2026-07-14", "15:00", "16:30", "ext_mj"),
+    ("extsch_july_sy_1", "서연", "사용자 테스트", "2026-07-08", "13:30", "14:30", "ext_sy"),
+    ("extsch_july_sy_2", "서연", "보고서 정리", "2026-07-10", "16:00", "17:00", "ext_sy"),
+    ("extsch_july_sy_3", "서연", "UX 워크숍", "2026-07-15", "10:00", "11:00", "ext_sy"),
+    ("extsch_july_jh_1", "지훈", "모델 평가", "2026-07-07", "15:00", "16:00", "ext_jh"),
+    ("extsch_july_jh_2", "지훈", "보안 점검", "2026-07-14", "10:00", "11:30", "ext_jh"),
+    ("extsch_july_jh_3", "지훈", "릴리즈 회의", "2026-07-16", "13:00", "14:00", "ext_jh"),
+    ("extsch_july_hr_1", "하린", "온보딩 세션", "2026-07-08", "11:00", "12:00", "ext_hr"),
+    ("extsch_july_hr_2", "하린", "파트너 콜", "2026-07-10", "14:00", "15:00", "ext_hr"),
+    ("extsch_july_hr_3", "하린", "회고 준비", "2026-07-17", "09:00", "10:00", "ext_hr"),
+]
+JULY_PRACTICE_CONVERSATION_IDS = [conversation[0] for conversation in JULY_PRACTICE_CONVERSATIONS]
+
+
+def strip_parenthetical_text(value: Any) -> Any:
+    """사용자에게 보이는 외부 데이터 문자열에서 소괄호와 그 안의 내용을 제거합니다."""
+
+    if not isinstance(value, str):
+        return value
+    cleaned = PARENTHETICAL_TEXT_RE.sub("", value)
+    return " ".join(cleaned.split())
+
+
+def strip_external_row_parentheticals(row: dict[str, Any]) -> dict[str, Any]:
+    """외부 tool 결과 row에서 사용자-facing 텍스트 필드의 소괄호 내용을 제거합니다."""
+
+    return {
+        key: strip_parenthetical_text(value) if key in USER_VISIBLE_TEXT_FIELDS else value
+        for key, value in row.items()
+    }
 
 
 def external_db_path_from_env() -> Path:
@@ -55,13 +138,17 @@ def external_schedule_summary(rows: list[dict[str, Any]]) -> str:
         return "조회된 외부 일정이 없습니다."
     lines: list[str] = []
     for row in rows:
-        member_name = row.get("member_name") or "이름 미정"
-        title = row.get("title") or "제목 없음"
+        clean_row = strip_external_row_parentheticals(row)
+        member_name = clean_row.get("member_name") or "이름 미정"
+        title = clean_row.get("title") or "제목 없음"
         date_text = row.get("date") or "날짜 미정"
         start_time = row.get("start_time") or "시간 미정"
         end_time = row.get("end_time") or "시간 미정"
-        notes = row.get("notes") or "비고 없음"
-        lines.append(f"- {member_name} | {title} | {date_text} {start_time}-{end_time} | {notes}")
+        notes = clean_row.get("notes")
+        line = f"- {member_name} | {title} | {date_text} {start_time}-{end_time}"
+        if notes:
+            line += f" | {notes}"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -116,105 +203,39 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
             )
 
     def seed(self) -> None:
-        """수업 fixture용 외부 멤버 대화와 일정을 현재 실행 날짜 기준으로 채웁니다.
+        """수업 fixture용 외부 멤버 대화와 기본 공유 일정을 채웁니다.
 
-        이미 오래된 데모 row가 있으면 지우거나 날짜를 갱신합니다. 이렇게 해야 테스트와
-        데모가 실행 날짜에 맞춰 "다음 주" 데이터를 안정적으로 보여 줍니다.
+        seed source에 해당하는 row만 지우고 다시 넣습니다. 앱에서 동기화한 `app:`
+        또는 `group:` 공유 일정은 학생 실습 결과일 수 있으므로 보존합니다.
         """
 
         with self.connect() as conn:
-            legacy_conversation_ids = ["ext_mj", "ext_sy", "ext_jh"]
-            placeholders = ",".join("?" for _ in legacy_conversation_ids)
+            placeholders = ",".join("?" for _ in JULY_PRACTICE_CONVERSATION_IDS)
             conn.execute(
                 f"DELETE FROM external_schedules WHERE source_conversation_id IN ({placeholders})",
-                legacy_conversation_ids,
+                JULY_PRACTICE_CONVERSATION_IDS,
             )
             conn.execute(
                 f"DELETE FROM external_messages WHERE conversation_id IN ({placeholders})",
-                legacy_conversation_ids,
+                JULY_PRACTICE_CONVERSATION_IDS,
             )
             conn.execute(
                 f"DELETE FROM external_conversations WHERE conversation_id IN ({placeholders})",
-                legacy_conversation_ids,
+                JULY_PRACTICE_CONVERSATION_IDS,
             )
 
-            conversations = [
-                ("ext_cs", "철수", "철수의 다음 주 일정 공유", "철수: 다음 주 화요일 11시는 영업 미팅, 목요일 14시는 파트너 콜이 있어요."),
-                ("ext_yh", "영희", "영희의 다음 주 일정 공유", "영희: 다음 주 수요일 13시는 리서치 리뷰, 15시는 마케팅 싱크, 목요일 16시는 콘텐츠 점검입니다."),
-            ]
             created_at = app_started_at_iso()
-            next_tuesday = next_weekday_iso(1)
-            next_wednesday = next_weekday_iso(2)
-            next_thursday = next_weekday_iso(3)
-            schedules = [
-                ("철수", "영업 미팅", next_tuesday, "11:00", "12:00", "ext_cs", "화요일 11시 불가"),
-                ("철수", "파트너 콜", next_thursday, "14:00", "15:00", "ext_cs", "목요일 14시 불가"),
-                ("영희", "리서치 리뷰", next_wednesday, "13:00", "14:00", "ext_yh", "수요일 13시 불가"),
-                ("영희", "마케팅 싱크", next_wednesday, "15:00", "16:00", "ext_yh", "수요일 15시 불가"),
-                ("영희", "콘텐츠 점검", next_thursday, "16:00", "17:00", "ext_yh", "목요일 16시 불가"),
-            ]
-            for conversation_id, member_name, title, content in conversations:
+            for conversation_id, member_name, title, content in JULY_PRACTICE_CONVERSATIONS:
                 conn.execute(
-                    """
-                    INSERT INTO external_conversations VALUES (?, ?, ?, ?)
-                    ON CONFLICT(conversation_id) DO UPDATE SET
-                        member_name = excluded.member_name,
-                        title = excluded.title
-                    """,
+                    "INSERT INTO external_conversations VALUES (?, ?, ?, ?)",
                     (conversation_id, member_name, title, created_at),
                 )
-                message_exists = conn.execute(
-                    """
-                    SELECT 1
-                    FROM external_messages
-                    WHERE conversation_id = ?
-                      AND sender = ?
-                      AND content = ?
-                    LIMIT 1
-                    """,
-                    (conversation_id, member_name, content),
-                ).fetchone()
-                if not message_exists:
-                    conn.execute(
-                        "INSERT INTO external_messages VALUES (?, ?, 'user', ?, ?, ?)",
-                        (
-                            new_id("extmsg"),
-                            conversation_id,
-                            member_name,
-                            content,
-                            created_at,
-                        ),
-                    )
-            for member_name, title, date, start_time, end_time, conversation_id, notes in schedules:
-                existing = conn.execute(
-                    """
-                    SELECT schedule_id
-                    FROM external_schedules
-                    WHERE member_name = ?
-                      AND title = ?
-                      AND COALESCE(source_conversation_id, '') = ?
-                    LIMIT 1
-                    """,
-                    (member_name, title, conversation_id),
-                ).fetchone()
-                if existing:
-                    conn.execute(
-                        """
-                        UPDATE external_schedules
-                        SET date = ?,
-                            start_time = ?,
-                            end_time = ?,
-                            notes = ?,
-                            source_conversation_id = ?
-                        WHERE schedule_id = ?
-                        """,
-                        (date, start_time, end_time, notes, conversation_id, existing["schedule_id"]),
-                    )
-                else:
-                    conn.execute(
-                        "INSERT INTO external_schedules VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        (new_id("extsch"), member_name, title, date, start_time, end_time, conversation_id, notes),
-                    )
+                conn.execute(
+                    "INSERT INTO external_messages VALUES (?, ?, 'user', ?, ?, ?)",
+                    (f"extmsg_{conversation_id}", conversation_id, member_name, content, created_at),
+                )
+            for schedule in JULY_PRACTICE_SCHEDULES:
+                conn.execute("INSERT INTO external_schedules VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (*schedule, ""))
 
     def create_shared_schedule(
         self,
@@ -229,14 +250,16 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
     ) -> dict[str, Any]:
         """공유 일정 저장소에 일정 하나를 등록하거나 같은 ID의 일정을 갱신합니다."""
 
-        normalized_member_name = str(member_name or PERSONAL_SHARED_MEMBER_NAME).strip() or PERSONAL_SHARED_MEMBER_NAME
-        normalized_title = str(title or "제목 없음").strip() or "제목 없음"
+        normalized_member_name = strip_parenthetical_text(
+            str(member_name or PERSONAL_SHARED_MEMBER_NAME).strip()
+        ) or PERSONAL_SHARED_MEMBER_NAME
+        normalized_title = strip_parenthetical_text(str(title or "제목 없음").strip()) or "제목 없음"
         normalized_date = str(date).split("T", 1)[0].strip() if date is not None else ""
         if not normalized_date:
             raise ValueError("date is required to create a shared schedule")
         normalized_start_time = str(start_time or "미정").strip() or "미정"
         normalized_end_time = str(end_time or "미정").strip() or "미정"
-        normalized_notes = notes or "공유 일정"
+        normalized_notes = strip_parenthetical_text(notes or "공유 일정") or "공유 일정"
         selected_schedule_id = schedule_id or new_id("shared")
         sync_status = "created"
 
@@ -315,7 +338,7 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
             )
             rows = [dict(row) for row in cur.fetchall()]
             conn.execute(f"DELETE FROM external_schedules WHERE {' OR '.join(where)}", params)
-        return rows
+        return [strip_external_row_parentheticals(row) for row in rows]
 
     def list_shared_schedules(
         self,
@@ -329,6 +352,12 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
 
         where: list[str] = []
         params: list[Any] = []
+        has_explicit_filter = any([member_names is not None, date_from, date_to, source_conversation_id])
+        if not has_explicit_filter:
+            member_names = JULY_PRACTICE_MEMBER_NAMES
+            date_from = JULY_PRACTICE_DATE_FROM
+            date_to = JULY_PRACTICE_DATE_TO
+
         normalized_members = [
             EXTERNAL_MEMBER_ALIAS.get(str(name).strip(), str(name).strip())
             for name in (member_names or [])
@@ -362,7 +391,7 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
         sql += " ORDER BY date, start_time, member_name LIMIT ?"
         params.append(max(1, min(int(limit or 50), 200)))
         with self.connect() as conn:
-            return [dict(row) for row in conn.execute(sql, params).fetchall()]
+            return [strip_external_row_parentheticals(dict(row)) for row in conn.execute(sql, params).fetchall()]
 
     def search_previous_conversations(
         self,
@@ -396,7 +425,7 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
         sql += " ORDER BY m.created_at DESC LIMIT ?"
         params.append(limit)
         with self.connect() as conn:
-            return [dict(row) for row in conn.execute(sql, params).fetchall()]
+            return [strip_external_row_parentheticals(dict(row)) for row in conn.execute(sql, params).fetchall()]
 
     def load_conversation_messages(self, conversation_id: str) -> list[dict[str, Any]]:
         """conversation_id 하나에 속한 외부 메시지를 작성 순서대로 반환합니다."""
@@ -411,7 +440,7 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
                 """,
                 (conversation_id,),
             )
-            return [dict(row) for row in cur.fetchall()]
+            return [strip_external_row_parentheticals(dict(row)) for row in cur.fetchall()]
 
     def extract_schedules_from_history(
         self,
@@ -447,4 +476,4 @@ class ExternalPeopleSQLiteStore(SQLiteFileStore):
                 """,
                 params,
             )
-            return [dict(row) for row in cur.fetchall()]
+            return [strip_external_row_parentheticals(dict(row)) for row in cur.fetchall()]

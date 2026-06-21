@@ -15,7 +15,12 @@ from student_parts.week01_wake_up_nana import (
     personal_create_schedule as week01_personal_create_schedule,
     week01_tools,
 )
-from student_parts.week02_structure_natural_language_requests import extract_schedule_request
+from student_parts.week02_structure_natural_language_requests import (
+    StructuredRequest,
+    extract_schedule_request,
+    extract_structured_request,
+    week02_prompt_parts,
+)
 
 
 _WEEK03_AGENT: Any | None = None
@@ -37,10 +42,29 @@ SQLITE_MEMORY_PROMPT = (
 #   Week 2에서 만든 structured_request를 SQLite에 저장하고 다시 조회/수정/삭제합니다.
 #   여기서부터 Nana는 메모리 리스트가 아니라 앱 DB에 남는 "기록장"을 갖게 됩니다.
 #
+# 구현 위치와 사용할 코드
+#   - 이 파일(student_parts/week03_build_nanas_logbook.py)의 SQLite tool 함수들을 구현합니다.
+#   - 실제 DB 접근은 fixed/app_store.py의 AppSQLiteStore를 사용하고, 이 파일의 _store()가
+#     CONFIG.app_db_path 기준 store 객체를 만들어 줍니다.
+#   - dict/JSON 문자열/자연어 입력 정리는 coerce_payload(), normalize_structured_request_payload()를 사용합니다.
+#   - save/list/get helper는 save_structured_request_payload(), list_saved_requests_payload(),
+#     get_saved_request_payload()처럼 payload를 먼저 만드는 함수에 구현합니다.
+#   - 일정 목록/수정/삭제는 list_saved_schedules_payload(), update_saved_schedule_payload(),
+#     delete_saved_schedules_payload()에서 AppSQLiteStore.list_schedules/update_schedule/delete_* 메서드를 호출합니다.
+#   - 자연어 구조화는 student_parts/week02_structure_natural_language_requests.py의
+#     extract_schedule_request tool 또는 extract_structured_request() helper를 사용합니다.
+#   - Week 3부터 SQLite 저장은 normalize_structured_request_payload()를 거쳐
+#     StructuredRequest 스키마로 정리한 payload만 AppSQLiteStore.save_structured_request(...)에 전달합니다.
+#   - Week 1 호환 personal_create_schedule은 week01_personal_create_schedule과
+#     structured_request_from_week01_schedule()을 거쳐 SQLite 저장 payload로 변환합니다.
+#
 # 구현 대상
 #   1. save_structured_request
-#      - payload가 dict 또는 JSON 문자열로 들어올 수 있으므로 coerce_payload로 dict로 맞춥니다.
-#      - 저장 helper를 호출해 현재 CONFIG.app_db_path의 SQLite DB에 저장합니다.
+#      - payload가 dict, JSON 문자열, 자연어 문자열로 들어올 수 있으므로 coerce_payload로 먼저 정리합니다.
+#      - extract_schedule_request의 전체 tool 결과가 들어오면 payload["structured_request"]만 꺼내 저장합니다.
+#      - kind가 없는 자연어 입력이면 extract_structured_request(payload)를 호출해 StructuredRequest로 정리합니다.
+#      - StructuredRequest.model_validate(...)로 저장 직전 스키마를 한 번 더 검증한 뒤
+#        현재 CONFIG.app_db_path의 SQLite DB에 저장합니다.
 #      - 저장 결과의 request_id, kind, saved_rows를 ok/tool_name과 함께 JSON으로 반환합니다.
 #
 #   2. list_saved_requests / get_saved_request
@@ -91,12 +115,38 @@ def json_payload(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def coerce_payload(payload: dict[str, Any] | str) -> dict[str, Any]:
-    """dict 또는 JSON 문자열 payload를 저장소가 받을 수 있는 dict로 맞춥니다."""
+def coerce_payload(payload: dict[str, Any] | str) -> dict[str, Any] | str:
+    """dict, JSON 문자열, 자연어 문자열 payload를 저장 전 단계 값으로 맞춥니다."""
 
     if isinstance(payload, str):
-        return json.loads(payload)
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            return payload
+        return decoded if isinstance(decoded, dict) else payload
     return payload
+
+
+def normalize_structured_request_payload(payload: dict[str, Any] | str) -> dict[str, Any]:
+    """SQLite 저장 전 입력을 StructuredRequest 스키마 기준 payload로 정리합니다."""
+
+    coerced = coerce_payload(payload)
+    if isinstance(coerced, str):
+        return extract_structured_request(coerced).model_dump()
+
+    raw_payload = coerced.get("structured_request")
+    if isinstance(raw_payload, dict):
+        source = raw_payload
+    elif "kind" not in coerced and isinstance(coerced.get("query") or coerced.get("text"), str):
+        return extract_structured_request(str(coerced.get("query") or coerced.get("text"))).model_dump()
+    else:
+        source = coerced
+
+    structured = StructuredRequest.model_validate(source).model_dump()
+    source_schedule_id = source.get("source_schedule_id")
+    if source_schedule_id:
+        structured["source_schedule_id"] = source_schedule_id
+    return structured
 
 
 def save_structured_request_payload(
@@ -104,10 +154,11 @@ def save_structured_request_payload(
     *,
     store: AppSQLiteStore | None = None,
 ) -> dict[str, Any]:
-    """structured request를 앱 DB에 저장하고 tool 결과 payload를 만듭니다."""
+    """입력을 StructuredRequest payload로 정리한 뒤 앱 DB에 저장합니다."""
 
     selected_store = store or _store()
-    saved = selected_store.save_structured_request(coerce_payload(payload))
+    structured_payload = normalize_structured_request_payload(payload)
+    saved = selected_store.save_structured_request(structured_payload)
     return {"ok": True, "tool_name": "save_structured_request", **saved}
 
 
@@ -143,18 +194,19 @@ def list_saved_schedules_payload(
     """수정/삭제 후보로 보여 줄 저장 일정 목록 payload를 만듭니다."""
 
     selected_store = store or _store()
+    effective_kind = kind or "personal_schedule"
     return {
         "ok": True,
         "tool_name": "personal_list_saved_schedules",
         "filters": {
-            "kind": kind,
+            "kind": effective_kind,
             "date_from": date_from,
             "date_to": date_to,
             "limit": limit,
         },
         "schedules": selected_store.list_schedules(
             limit=limit,
-            kind=kind,
+            kind=effective_kind,
             date_from=date_from,
             date_to=date_to,
         ),
@@ -307,7 +359,7 @@ def personal_create_schedule(
 
 @tool
 def save_structured_request(payload: dict[str, Any] | str) -> str:
-    """2주차 구조화 출력 페이로드를 정규화된 SQLite 테이블에 저장합니다."""
+    """입력을 StructuredRequest로 정리한 뒤 정규화된 SQLite 테이블에 저장합니다."""
 
     return json_payload(save_structured_request_payload(coerce_payload(payload), store=_store()))
 
@@ -445,9 +497,10 @@ def week03_system_prompt() -> str:
 
 
 def week03_prompt_parts() -> list[str]:
-    """3주차 system prompt 조각입니다."""
+    """1~3주차 system prompt 조각을 누적합니다."""
 
     return [
+        *week02_prompt_parts(),
         "Week 2 요청 구조화 agent는 대화를 StructuredRequest로 직접 반환해 구조화 결과를 확인했다. "
         "Week 3부터는 최종 답변은 자연어로 작성하되, 새 일정/할 일/알림 저장 요청은 "
         "extract_schedule_request tool 결과의 structured_request를 SQLite 저장 도구에 넘긴다.",

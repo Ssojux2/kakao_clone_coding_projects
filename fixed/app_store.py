@@ -14,7 +14,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fixed.external_mcp import delete_personal_schedule_from_shared, sync_personal_schedule_to_shared
+from fixed.external_mcp import (
+    delete_group_schedule_from_shared,
+    delete_personal_schedule_from_shared,
+    sync_group_schedule_to_shared,
+    sync_personal_schedule_to_shared,
+)
 from fixed.store_base import (
     SCHEDULE_COLUMNS,
     SCHEDULE_COLUMNS_WITH_KIND,
@@ -281,7 +286,7 @@ class AppSQLiteStore(SQLiteFileStore):
         - todo: `structured_requests`와 `todos`에 저장
         - reminder: `structured_requests`와 `reminders`에 저장
 
-        개인 일정은 외부 공유 저장소에도 복사해 Week 5/6에서 "나" 일정으로 조회되게 합니다.
+        개인 일정은 "나" busy-time으로, 그룹 일정은 참석자별 busy-time으로 외부 공유 저장소에도 복사합니다.
         """
 
         request_id = new_id("req")
@@ -364,7 +369,7 @@ class AppSQLiteStore(SQLiteFileStore):
                     ),
                 )
                 saved_rows.append({"table": "schedules", "id": schedule_id})
-                if kind == "personal_schedule":
+                if kind in {"personal_schedule", "group_schedule"}:
                     schedule_for_shared = {
                         "schedule_id": schedule_id,
                         "request_id": request_id,
@@ -401,7 +406,10 @@ class AppSQLiteStore(SQLiteFileStore):
         if schedule_for_shared is not None:
             # 외부 공유 저장소 동기화는 앱 DB transaction 바깥에서 수행합니다.
             # 외부 MCP 실패가 앱 DB 저장 자체를 되돌리지 않게 하기 위함입니다.
-            shared_sync = sync_personal_schedule_to_shared(schedule_for_shared)
+            if kind == "group_schedule":
+                shared_sync = sync_group_schedule_to_shared(schedule_for_shared)
+            else:
+                shared_sync = sync_personal_schedule_to_shared(schedule_for_shared)
 
         return {"request_id": request_id, "kind": kind, "saved_rows": saved_rows, "shared_sync": shared_sync}
 
@@ -610,6 +618,9 @@ class AppSQLiteStore(SQLiteFileStore):
         shared_sync = None
         if updated.get("request_kind") == "personal_schedule":
             shared_sync = sync_personal_schedule_to_shared(updated)
+        elif updated.get("request_kind") == "group_schedule":
+            delete_group_schedule_from_shared(current)
+            shared_sync = sync_group_schedule_to_shared(updated)
         return {"schedule": updated, "shared_sync": shared_sync}
 
     def find_schedules(
@@ -689,6 +700,8 @@ class AppSQLiteStore(SQLiteFileStore):
         if decoded.get("request_kind") == "personal_schedule" and decoded.get("request_id"):
             # 개인 일정은 외부 공유 저장소에 복사본이 있으므로 앱 DB 삭제와 함께 제거합니다.
             delete_personal_schedule_from_shared(decoded["request_id"])
+        elif decoded.get("request_kind") == "group_schedule" and decoded.get("request_id"):
+            delete_group_schedule_from_shared(decoded)
 
         return decoded
 
@@ -748,4 +761,6 @@ class AppSQLiteStore(SQLiteFileStore):
         for row in decoded_rows:
             if row.get("request_kind") == "personal_schedule" and row.get("request_id"):
                 delete_personal_schedule_from_shared(row["request_id"])
+            elif row.get("request_kind") == "group_schedule" and row.get("request_id"):
+                delete_group_schedule_from_shared(row)
         return decoded_rows

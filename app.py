@@ -170,7 +170,7 @@ def _saved_schedule_lines(limit: int = 8) -> list[str]:
     list_schedules = getattr(runtime.app_store, "list_schedules", None)
     if list_schedules is None:
         return []
-    rows = list_schedules(limit=limit)
+    rows = list_schedules(limit=limit, kind="personal_schedule")
     lines: list[str] = []
     for row in rows:
         date = row.get("date") or "날짜 미정"

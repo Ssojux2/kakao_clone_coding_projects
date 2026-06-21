@@ -8,7 +8,13 @@ from dataclasses import replace
 import fixed.runtime_clock as runtime_clock
 import student_parts.week05_load_kanas_past_conversations as week05_module
 from fixed.app_store import AppSQLiteStore
-from fixed.external_people_store import ExternalPeopleSQLiteStore
+from fixed.external_people_store import (
+    JULY_PRACTICE_DATE_FROM,
+    JULY_PRACTICE_DATE_TO,
+    JULY_PRACTICE_MEMBER_NAMES,
+    JULY_PRACTICE_SCHEDULES,
+    ExternalPeopleSQLiteStore,
+)
 from fixed.session_scope import conversation_session_scope
 from fixed.store_base import new_id
 
@@ -33,18 +39,14 @@ def test_week05_external_store_refreshes_stale_demo_schedules(tmp_path) -> None:
 
     refreshed = ExternalPeopleSQLiteStore(db_path)
     rows = refreshed.extract_schedules_from_history(
-        member_names=["철수", "영희"],
-        date_from=runtime_clock.next_weekday_iso(1),
-        date_to=runtime_clock.next_weekday_iso(3),
+        member_names=JULY_PRACTICE_MEMBER_NAMES,
+        date_from=JULY_PRACTICE_DATE_FROM,
+        date_to=JULY_PRACTICE_DATE_TO,
     )
 
-    assert len(rows) == 5
-    assert {row["date"] for row in rows} == {
-        runtime_clock.next_weekday_iso(1),
-        runtime_clock.next_weekday_iso(2),
-        runtime_clock.next_weekday_iso(3),
-    }
-    assert {row["member_name"] for row in rows} == {"철수", "영희"}
+    assert len(rows) == len(JULY_PRACTICE_SCHEDULES)
+    assert {row["date"] for row in rows} == {schedule[3] for schedule in JULY_PRACTICE_SCHEDULES}
+    assert {row["member_name"] for row in rows} == set(JULY_PRACTICE_MEMBER_NAMES)
 
 
 def test_week05_mcp_stdio_server_loads_tools_and_returns_current_schedules(tmp_path) -> None:
@@ -55,9 +57,9 @@ def test_week05_mcp_stdio_server_loads_tools_and_returns_current_schedules(tmp_p
         }
         result = await tools["extract_schedules_from_history"].ainvoke(
             {
-                "member_names": ["철수", "영희"],
-                "date_from": runtime_clock.next_weekday_iso(1),
-                "date_to": runtime_clock.next_weekday_iso(3),
+                "member_names": JULY_PRACTICE_MEMBER_NAMES,
+                "date_from": JULY_PRACTICE_DATE_FROM,
+                "date_to": JULY_PRACTICE_DATE_TO,
             }
         )
         return {"tool_names": set(tools), "payload": json.loads(_mcp_text(result))}
@@ -73,8 +75,36 @@ def test_week05_mcp_stdio_server_loads_tools_and_returns_current_schedules(tmp_p
         "delete_shared_schedule",
         "list_shared_schedules",
     }
-    assert len(payload["rows"]) == 5
-    assert {row["member_name"] for row in payload["rows"]} == {"철수", "영희"}
+    assert len(payload["rows"]) == len(JULY_PRACTICE_SCHEDULES)
+    assert {row["member_name"] for row in payload["rows"]} == set(JULY_PRACTICE_MEMBER_NAMES)
+
+
+def test_week05_default_shared_schedule_query_prefers_july_fixture(tmp_path) -> None:
+    db_path = tmp_path / "default_shared.sqlite3"
+    store = ExternalPeopleSQLiteStore(db_path)
+    store.create_shared_schedule(
+        member_name="나",
+        title="개인 코칭",
+        date="2026-05-15",
+        start_time="11:00",
+        end_time="12:00",
+        notes="앱 개인 일정 자동 동기화",
+        source_conversation_id="app:req_old",
+        schedule_id="shared_old_personal",
+    )
+
+    listed = json.loads(
+        week05_module.call_mcp_tool_sync(
+            "list_shared_schedules",
+            {},
+            db_path=db_path,
+        )
+    )
+
+    assert len(listed["rows"]) == len(JULY_PRACTICE_SCHEDULES)
+    assert {row["member_name"] for row in listed["rows"]} == set(JULY_PRACTICE_MEMBER_NAMES)
+    assert all(row["source_conversation_id"].startswith("ext_") for row in listed["rows"])
+    assert "나 | 개인 코칭 | 2026-05-15 11:00-12:00" not in listed["schedule_summary"]
 
 
 def test_week05_mcp_shared_schedule_tool_registers_my_schedule(tmp_path) -> None:
@@ -139,6 +169,45 @@ def test_week05_mcp_shared_schedule_tool_registers_my_schedule(tmp_path) -> None
     assert "나 | 개인 집중 작업 | 2026-06-12 10:00-11:00" in listed["schedule_summary"]
 
 
+def test_week05_shared_schedule_strips_parenthetical_text(tmp_path) -> None:
+    db_path = tmp_path / "mcp_shared_parentheses.sqlite3"
+
+    created = json.loads(
+        week05_module.call_mcp_tool_sync(
+            "create_shared_schedule",
+            {
+                "member_name": "나(본인)",
+                "title": "개인 집중 작업(비공개)",
+                "date": "2026-06-12",
+                "start_time": "13:00",
+                "end_time": "14:00",
+                "notes": "테스트 공유 일정(내부 메모)",
+                "source_conversation_id": "app:req_parentheses",
+                "schedule_id": "shared_parentheses_test",
+            },
+            db_path=db_path,
+        )
+    )
+    listed = json.loads(
+        week05_module.call_mcp_tool_sync(
+            "list_shared_schedules",
+            {
+                "member_names": ["나"],
+                "date_from": "2026-06-12",
+                "date_to": "2026-06-12",
+            },
+            db_path=db_path,
+        )
+    )
+
+    assert created["shared_schedule"]["member_name"] == "나"
+    assert created["shared_schedule"]["title"] == "개인 집중 작업"
+    assert created["shared_schedule"]["notes"] == "테스트 공유 일정"
+    assert listed["rows"][0]["title"] == "개인 집중 작업"
+    assert "(" not in listed["schedule_summary"]
+    assert ")" not in listed["schedule_summary"]
+
+
 def test_week05_personal_schedule_save_syncs_to_shared_mcp_store(tmp_path, monkeypatch) -> None:
     shared_db_path = tmp_path / "shared.sqlite3"
     monkeypatch.setenv("KANANA_EXTERNAL_DB_PATH", str(shared_db_path))
@@ -165,6 +234,38 @@ def test_week05_personal_schedule_save_syncs_to_shared_mcp_store(tmp_path, monke
     assert saved["shared_sync"]["ok"] is True
     assert rows[0]["title"] == "개인 코칭"
     assert rows[0]["source_conversation_id"] == f"app:{saved['request_id']}"
+
+
+def test_week05_group_schedule_save_syncs_attendees_to_shared_mcp_store(tmp_path, monkeypatch) -> None:
+    shared_db_path = tmp_path / "group_shared.sqlite3"
+    monkeypatch.setenv("KANANA_EXTERNAL_DB_PATH", str(shared_db_path))
+    store = AppSQLiteStore(tmp_path / "app.sqlite3")
+
+    saved = store.save_structured_request(
+        {
+            "kind": "group_schedule",
+            "title": "팀 회의",
+            "date": "2026-07-23",
+            "start_time": "15:00",
+            "end_time": "16:00",
+            "members": ["민준", "서연"],
+            "reason": "테스트 그룹 일정",
+            "original_text": "2026-07-23 오후 3시에 민준 서연과 팀 회의 잡아줘",
+        }
+    )
+    rows = ExternalPeopleSQLiteStore(shared_db_path).extract_schedules_from_history(
+        member_names=["민준", "서연"],
+        date_from="2026-07-23",
+        date_to="2026-07-23",
+    )
+
+    assert saved["shared_sync"]["ok"] is True
+    assert {row["member_name"] for row in rows} == {"민준", "서연"}
+    assert {row["title"] for row in rows} == {"팀 회의"}
+    assert {row["source_conversation_id"] for row in rows} == {
+        f"group:{saved['request_id']}:민준",
+        f"group:{saved['request_id']}:서연",
+    }
 
 
 def test_week05_personal_schedule_delete_removes_shared_copy(tmp_path, monkeypatch) -> None:
@@ -269,7 +370,7 @@ def test_week05_mcp_shared_schedule_tool_deletes_by_app_source(tmp_path) -> None
     assert rows == []
 
 
-def test_week05_mcp_stdio_server_returns_cheolsu_younghee_schedules(tmp_path) -> None:
+def test_week05_mcp_stdio_server_returns_july_practice_schedules(tmp_path) -> None:
     async def run() -> dict[str, object]:
         tools = {
             tool.name: tool
@@ -277,26 +378,21 @@ def test_week05_mcp_stdio_server_returns_cheolsu_younghee_schedules(tmp_path) ->
         }
         result = await tools["extract_schedules_from_history"].ainvoke(
             {
-                "member_names": ["철수", "영희"],
-                "date_from": runtime_clock.next_weekday_iso(1),
-                "date_to": runtime_clock.next_weekday_iso(3),
+                "member_names": JULY_PRACTICE_MEMBER_NAMES,
+                "date_from": JULY_PRACTICE_DATE_FROM,
+                "date_to": JULY_PRACTICE_DATE_TO,
             }
         )
         return json.loads(_mcp_text(result))
 
     payload = asyncio.run(run())
 
-    assert len(payload["rows"]) == 5
-    assert {row["member_name"] for row in payload["rows"]} == {"철수", "영희"}
-    assert {row["title"] for row in payload["rows"]} == {"영업 미팅", "파트너 콜", "리서치 리뷰", "마케팅 싱크", "콘텐츠 점검"}
-    assert "철수 | 영업 미팅 |" in payload["schedule_summary"]
-    assert f"{runtime_clock.next_weekday_iso(1)} 11:00-12:00" in payload["schedule_summary"]
-    assert "영희 | 리서치 리뷰 |" in payload["schedule_summary"]
-    assert f"{runtime_clock.next_weekday_iso(2)} 13:00-14:00" in payload["schedule_summary"]
-    assert "영희 | 마케팅 싱크 |" in payload["schedule_summary"]
-    assert f"{runtime_clock.next_weekday_iso(2)} 15:00-16:00" in payload["schedule_summary"]
-    assert "영희 | 콘텐츠 점검 |" in payload["schedule_summary"]
-    assert f"{runtime_clock.next_weekday_iso(3)} 16:00-17:00" in payload["schedule_summary"]
+    assert len(payload["rows"]) == len(JULY_PRACTICE_SCHEDULES)
+    assert {row["member_name"] for row in payload["rows"]} == set(JULY_PRACTICE_MEMBER_NAMES)
+    assert {row["title"] for row in payload["rows"]} == {schedule[2] for schedule in JULY_PRACTICE_SCHEDULES}
+    assert "철수 | API 연동 실습 | 2026-07-07 10:00-11:00" in payload["schedule_summary"]
+    assert "민준 | 데이터 정리 | 2026-07-08 09:30-10:30" in payload["schedule_summary"]
+    assert "하린 | 회고 준비 | 2026-07-17 09:00-10:00" in payload["schedule_summary"]
 
 
 def test_week05_external_lookup_keeps_requested_single_day(tmp_path) -> None:
@@ -307,18 +403,18 @@ def test_week05_external_lookup_keeps_requested_single_day(tmp_path) -> None:
         }
         result = await tools["extract_schedules_from_history"].ainvoke(
             {
-                "member_names": ["철수", "영희"],
-                "date_from": runtime_clock.next_weekday_iso(1),
-                "date_to": runtime_clock.next_weekday_iso(1),
+                "member_names": JULY_PRACTICE_MEMBER_NAMES,
+                "date_from": JULY_PRACTICE_DATE_FROM,
+                "date_to": JULY_PRACTICE_DATE_FROM,
             }
         )
         return json.loads(_mcp_text(result))
 
     payload = asyncio.run(run())
 
-    assert len(payload["rows"]) == 1
-    assert payload["rows"][0]["member_name"] == "철수"
-    assert payload["rows"][0]["date"] == runtime_clock.next_weekday_iso(1)
+    assert len(payload["rows"]) == 3
+    assert {row["member_name"] for row in payload["rows"]} == {"철수", "영희", "지훈"}
+    assert {row["date"] for row in payload["rows"]} == {JULY_PRACTICE_DATE_FROM}
 
 
 def test_week05_sync_mcp_helper_works_inside_running_event_loop(tmp_path) -> None:
@@ -327,8 +423,8 @@ def test_week05_sync_mcp_helper_works_inside_running_event_loop(tmp_path) -> Non
             "extract_schedules_from_history",
             {
                 "member_names": ["철수"],
-                "date_from": runtime_clock.next_weekday_iso(1),
-                "date_to": runtime_clock.next_weekday_iso(3),
+                "date_from": JULY_PRACTICE_DATE_FROM,
+                "date_to": JULY_PRACTICE_DATE_TO,
             },
             db_path=tmp_path / "loop.sqlite3",
         )
@@ -341,7 +437,7 @@ def test_week05_sync_mcp_helper_works_inside_running_event_loop(tmp_path) -> Non
 
 def test_week05_external_history_tools_return_member_schedules() -> None:
     conversations = json.loads(
-        week05_module.search_previous_conversations.invoke({"query": "다음 주", "member_names": ["철수"], "limit": 3})
+        week05_module.search_previous_conversations.invoke({"query": "7월", "member_names": ["철수"], "limit": 3})
     )
     schedules = json.loads(
         week05_module.extract_schedules_from_history.invoke(
@@ -383,7 +479,7 @@ def test_week05_collect_member_schedules_reads_saved_sqlite_not_other_chat_memor
     )
     AppSQLiteStore(db_path).save_structured_request(
         {
-            "kind": "group_schedule",
+            "kind": "personal_schedule",
             "title": "SQLite 저장 일정",
             "date": "2026-06-12",
             "start_time": "11:00",

@@ -53,6 +53,60 @@ def test_week03_save_preserves_llm_kind_and_members(tmp_path) -> None:
     assert rows[0]["attendees"] == ["철수", "영희"]
 
 
+def test_week03_save_unwraps_structured_request_before_sqlite(tmp_path) -> None:
+    store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    saved = save_structured_request_payload(
+        {
+            "ok": True,
+            "tool_name": "extract_schedule_request",
+            "base_date": "2026-06-21",
+            "structured_request": {
+                "kind": "personal_schedule",
+                "title": "개인 코칭",
+                "date": "2026-06-22",
+                "start_time": "10:00",
+                "end_time": "11:00",
+                "members": ["나"],
+                "reason": "구조화된 tool 결과",
+                "original_text": "내일 오전 10시에 개인 코칭 저장해줘",
+            },
+        },
+        store=store,
+    )
+    row = store.get_saved_request(saved["request_id"])
+    schedules = store.list_schedules(limit=10)
+
+    assert saved["kind"] == "personal_schedule"
+    assert row is not None
+    assert row["kind"] == "personal_schedule"
+    assert json.loads(row["raw_json"])["title"] == "개인 코칭"
+    assert schedules[0]["title"] == "개인 코칭"
+
+
+def test_week03_save_structures_raw_text_before_sqlite(tmp_path, monkeypatch) -> None:
+    store = AppSQLiteStore(tmp_path / "app.sqlite3")
+
+    def fake_extract_structured_request(text: str) -> week03_module.StructuredRequest:
+        return week03_module.StructuredRequest(
+            kind="todo",
+            title="회고 준비",
+            date="2026-06-23",
+            priority="high",
+            reason="자연어 저장 전 구조화",
+            original_text=text,
+        )
+
+    monkeypatch.setattr(week03_module, "extract_structured_request", fake_extract_structured_request)
+
+    saved = save_structured_request_payload("2026-06-23까지 회고 준비 할 일 추가해줘", store=store)
+    row = store.get_saved_request(saved["request_id"])
+
+    assert saved["kind"] == "todo"
+    assert row is not None
+    assert row["title"] == "회고 준비"
+    assert json.loads(row["raw_json"])["original_text"] == "2026-06-23까지 회고 준비 할 일 추가해줘"
+
+
 def test_week03_saved_schedules_are_visible_from_new_chat_scope(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "app.sqlite3"
     monkeypatch.setattr(week03_module, "CONFIG", replace(week03_module.CONFIG, app_db_path=db_path))
@@ -151,7 +205,7 @@ def test_week03_date_filtered_lookup_finds_tomorrow_after_many_old_schedules(tmp
     week03_module.save_structured_request.invoke(
         {
             "payload": {
-                "kind": "group_schedule",
+                "kind": "personal_schedule",
                 "title": "개발 미팅",
                 "date": "2026-06-21",
                 "start_time": "10:00",
@@ -174,4 +228,30 @@ def test_week03_date_filtered_lookup_finds_tomorrow_after_many_old_schedules(tmp
 
     assert listed["filters"]["date_from"] == "2026-06-21"
     assert [row["title"] for row in listed["schedules"]] == ["개발 미팅"]
-    assert listed["schedules"][0]["request_kind"] == "group_schedule"
+    assert listed["schedules"][0]["request_kind"] == "personal_schedule"
+
+
+def test_week03_personal_list_saved_schedules_hides_group_schedules_by_default(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "app.sqlite3"
+    monkeypatch.setenv("KANANA_EXTERNAL_DB_PATH", str(tmp_path / "external.sqlite3"))
+    monkeypatch.setattr(week03_module, "CONFIG", replace(week03_module.CONFIG, app_db_path=db_path))
+    store = AppSQLiteStore(db_path)
+    store.save_structured_request(
+        {
+            "kind": "group_schedule",
+            "title": "공유 팀 회의",
+            "date": "2026-07-23",
+            "start_time": "15:00",
+            "end_time": "16:00",
+            "members": ["민준", "서연"],
+        }
+    )
+
+    default_listed = json.loads(week03_module.personal_list_saved_schedules.invoke({"limit": 10}))
+    group_listed = json.loads(
+        week03_module.personal_list_saved_schedules.invoke({"limit": 10, "kind": "group_schedule"})
+    )
+
+    assert default_listed["filters"]["kind"] == "personal_schedule"
+    assert default_listed["schedules"] == []
+    assert [row["title"] for row in group_listed["schedules"]] == ["공유 팀 회의"]

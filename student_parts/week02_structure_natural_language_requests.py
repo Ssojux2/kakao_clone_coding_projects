@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from fixed.config import CONFIG
 from fixed.llm import chat_model
 from fixed.runtime_clock import current_app_date_iso
-from student_parts.week01_wake_up_nana import join_system_prompt
+from student_parts.week01_wake_up_nana import join_system_prompt, week01_prompt_parts
 
 
 RequestKind = Literal["personal_schedule", "group_schedule", "todo", "reminder", "unknown"]
@@ -23,6 +23,17 @@ _WEEK02_AGENT: Any | None = None
 #   사용자의 한국어 자연어 요청을 일정 앱이 읽을 수 있는 StructuredRequest로 바꿉니다.
 #   Week 1은 이미 정해진 인자를 받아 일정을 만들었다면, Week 2는 "내일 오후 3시" 같은
 #   자연어를 날짜/시간/종류/멤버 필드로 구조화하는 단계입니다.
+#
+# 구현 위치와 사용할 코드
+#   - 이 파일(student_parts/week02_structure_natural_language_requests.py)의 StructuredRequest 스키마와
+#     build_week02_agent(), extract_structured_request(), extract_schedule_request() 흐름을 확인합니다.
+#   - build_week02_agent()는 langchain.agents.create_agent, fixed/llm.py의 chat_model(),
+#     week02_system_prompt(), response_format=StructuredRequest를 사용해 Week 2 단일 agent를 만듭니다.
+#   - extract_structured_request()는 Week 3 이상 tool에서 재사용되는 helper이며,
+#     agent를 새로 만들지 않고 chat_model().with_structured_output(StructuredRequest, ...)를 호출합니다.
+#   - extract_schedule_request()는 extract_structured_request() 결과를 base_date와 함께 JSON tool payload로 감쌉니다.
+#   - week02_prompt_parts()는 student_parts/week01_wake_up_nana.py의 week01_prompt_parts() 위에
+#     Week 2 구조화 지시를 추가합니다.
 #
 # 구현 대상
 #   build_week02_agent
@@ -39,7 +50,7 @@ _WEEK02_AGENT: Any | None = None
 # 참고 코드
 #   extract_schedule_request
 #      - Week 3 이상에서 DB 저장 tool chain에 쓰는 재사용 helper입니다.
-#      - query 문자열을 extract_structured_request(query)에 넘긴 뒤 JSON tool payload로 감쌉니다.
+#      - query 문자열을 agent가 아닌 structured LLM 호출로 구조화한 뒤 JSON tool payload로 감쌉니다.
 #
 # 검증 방법
 #   ./run.sh --week2로 실행한 뒤 "다음 주 화요일 오후 3시에 철수랑 회의 잡아줘" 같은 문장을 입력합니다.
@@ -61,43 +72,30 @@ class StructuredRequest(BaseModel):
     original_text: str = Field(default="", description="원본 사용자 입력")
 
 
-def structured_output_system_prompt() -> str:
-    """2주차 LLM structured output 에이전트가 따르는 시스템 프롬프트입니다."""
+def _coerce_structured_request(value: Any) -> StructuredRequest:
+    """LangChain structured output 결과를 StructuredRequest로 정규화합니다."""
 
-    return (
-        "너는 Kanana 일정 앱의 요청 구조화 에이전트다. "
-        "사용자의 한국어 자연어 요청을 읽고 반드시 StructuredRequest 스키마로만 응답한다. "
-        "kind는 personal_schedule, group_schedule, todo, reminder, unknown 중 하나다. "
-        "날짜는 YYYY-MM-DD, 시간은 HH:MM 24시간 형식으로 채운다. "
-        f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
-        "오늘, 내일, 모레, 다음 주, 요일 표현 같은 상대 날짜는 이 현재 날짜를 기준으로 판단한다. "
-        "kind와 members는 사용자 문맥을 직접 판단해 채운다. "
-        "확실하지 않은 필드는 None 또는 빈 배열로 두고, reason에는 어떤 단서를 근거로 구조화했는지 짧게 쓴다. "
-        "코드가 이후에 kind나 members를 룰로 보정하지 않으므로, 스키마에 들어갈 최종 판단을 신중하게 작성한다."
-    )
-
-
-def build_langchain_structured_agent() -> object:
-    """Week 2 structured output agent를 반환하는 호환용 builder입니다."""
-
-    return build_week02_agent()
-
-
-def _structured_response_from_result(result: dict[str, Any]) -> StructuredRequest:
-    structured = result.get("structured_response")
-    if isinstance(structured, StructuredRequest):
-        return structured
-    if isinstance(structured, dict):
-        return StructuredRequest.model_validate(structured)
+    if isinstance(value, StructuredRequest):
+        return value
+    if isinstance(value, dict):
+        return StructuredRequest.model_validate(value)
     raise RuntimeError("LLM structured output 결과에서 StructuredRequest를 찾지 못했습니다.")
 
 
 def extract_structured_request(text: str) -> StructuredRequest:
-    """LLM structured output으로 사용자 요청을 StructuredRequest로 변환합니다."""
+    """agent를 새로 띄우지 않고 structured LLM 호출로 요청을 변환합니다."""
 
-    agent = build_langchain_structured_agent()
-    result = agent.invoke({"messages": [{"role": "user", "content": text}]})
-    return _structured_response_from_result(result)
+    structured_model = chat_model().with_structured_output(
+        StructuredRequest,
+        method="function_calling",
+    )
+    result = structured_model.invoke(
+        [
+            {"role": "system", "content": week02_system_prompt()},
+            {"role": "user", "content": text},
+        ]
+    )
+    return _coerce_structured_request(result)
 
 
 @tool
@@ -132,12 +130,14 @@ def week02_prompt_parts() -> list[str]:
     """2주차 structured output agent가 따르는 system prompt 조각입니다."""
 
     return [
+        *week01_prompt_parts(),
         "너는 Kanana의 Week 2 요청 구조화 agent다. "
         f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
         "사용자의 한국어 자연어 요청을 읽고 날짜, 시간, 제목, 멤버, 종류를 StructuredRequest 스키마로 직접 구조화한다. "
         "Week 2 대화에서는 일정 생성/저장 tool을 호출하지 않고, 구조화 결과 자체를 최종 출력으로 확인한다. "
         "Week 2에서는 SQLite 저장, RAG, 외부 멤버 일정 조율을 처리하지 않는다. "
-        "최종 답변은 반드시 StructuredRequest class 형식의 structured_response로 반환한다."
+        "Week 1의 tool 호출/자연어 답변 지시보다 Week 2의 structured output 계약을 우선한다. "
+        "최종 답변은 StructuredRequest structured_response 하나만 반환하고, 설명 문장이나 JSON object를 반복 출력하지 않는다."
     ]
 
 

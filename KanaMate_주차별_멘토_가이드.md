@@ -14,7 +14,9 @@
 | 검증했다 | JSON payload, trace, test 결과 중 최소 하나 이상으로 결과를 확인했다. |
 | 연결된다 | 이번 주차 결과가 다음 주차 또는 최종 시스템 흐름과 연결된다. |
 
-멘토 리뷰의 직접 구현 범위는 각 `student_parts/weekXX_*.py` 파일 최상단 `[수강생 구현 가이드]`가 지정한 핵심 `@tool` 함수입니다. prompt, schema, helper, tool-list, agent builder, compatibility helper, `mcp_server/sqlite_mcp_server.py`의 MCP tool은 학생이 다시 작성하는 대상이 아니라 연결 구조를 읽는 참고 코드로 봅니다.
+멘토 리뷰의 직접 구현 범위는 각 `student_parts/weekXX_*.py` 파일 최상단 `[수강생 구현 가이드]`가 지정한 함수와 tool입니다. prompt, schema, helper, tool-list, agent builder, compatibility helper, `mcp_server/sqlite_mcp_server.py`의 MCP tool은 주차별 가이드에서 별도 구현 대상으로 지정하지 않는 한 학생이 다시 작성하는 대상이 아니라 연결 구조를 읽는 참고 코드로 봅니다.
+
+현재 기준본은 Week 1~5가 각 주차별 **단일 LangChain agent**로 동작하고, Week 6에서만 supervisor가 Nana/Kana 하위 agent로 위임하는 구조입니다. Week 3 이후 저장 흐름은 SQLite에 바로 쓰기 전에 `StructuredRequest` 형태로 한 번 정리한 뒤 저장하는 것을 기준으로 리뷰합니다.
 
 ---
 
@@ -32,7 +34,7 @@
 | 일정 저장 | 생성된 일정이 `PERSONAL_SCHEDULES` 같은 메모리 저장소에 누적되는지 확인한다. |
 | 일정 조회 | 전체 조회와 날짜 조건 조회가 구분되어 동작하는지 확인한다. |
 | 일정 삭제 | `schedule_id` 기준으로 정확한 일정이 삭제되는지 확인한다. |
-| JSON 반환 | `created_schedule`, `schedules`, `deleted`, `structured_request` 필드가 포함되는지 확인한다. |
+| JSON 반환 | 생성은 `created_schedule`, 조회는 `schedules`, 삭제는 `deleted` 필드가 포함되는지 확인한다. |
 | trace 확인 | 사용자의 요청에 대해 적절한 Tool이 호출되었는지 확인한다. |
 
 ### 자주 발생하는 오류
@@ -40,13 +42,13 @@
 - 일정 payload는 만들었지만 저장소에 추가하지 않는 경우
 - 삭제 함수가 동작해도 실제 목록이 바뀌지 않는 경우
 - 반환값이 JSON 문자열 형식이 아니거나 필드가 누락되는 경우
-- `structured_request`를 반환하지 않아 다음 주차와 연결이 어려운 경우
+- 새 대화 범위에서도 이전 대화의 임시 일정이 보이는 경우
 
 ### 멘토 피드백 방향
 
 - 일정 생성 결과가 화면에는 보이지만 저장소에 남는지 다시 확인하도록 안내한다.
 - 삭제 전후 목록을 비교해서 실제로 어떤 일정이 삭제됐는지 검증하도록 안내한다.
-- 이후 DB 저장 흐름과 연결될 수 있도록 `structured_request` 필드가 포함되어야 함을 짚어준다.
+- Week 1 일정은 현재 대화 안에서만 유지되는 임시 메모리이며, Week 3 이후의 영구 저장과 다르다는 점을 짚어준다.
 
 ### 최종 컨펌 기준
 
@@ -62,7 +64,7 @@
 
 ### 핵심 과제
 
-`extract_schedule_request` Tool로 자연어 요청을 `StructuredRequest` schema에 맞는 구조화 데이터로 변환한다.
+Week 2 단일 agent가 tool 호출 없이 자연어 요청을 `StructuredRequest` schema에 맞는 structured output으로 반환하게 한다. `extract_schedule_request`는 Week 3 이후 저장 tool chain에서 재사용되는 helper tool로 본다.
 
 ### 멘토가 꼭 봐야 할 것
 
@@ -73,7 +75,8 @@
 | 날짜·시간 처리 | 날짜는 `YYYY-MM-DD`, 시간은 `HH:MM` 형식으로 정리되는지 확인한다. |
 | 애매한 요청 처리 | 확실하지 않은 값이 억지로 채워지지 않고 `None` 또는 빈 배열로 처리되는지 확인한다. |
 | Pydantic 검증 | LLM 출력이 schema 검증을 통과하는지 확인한다. |
-| 1주차 연결성 | 구조화 결과가 일정 생성 Tool 입력으로 활용 가능한지 확인한다. |
+| 단일 agent 실행 | `build_week02_agent()`가 `response_format=StructuredRequest`를 사용하고, Week 2 대화 agent에는 별도 tool이 없는지 확인한다. |
+| 3주차 연결성 | 구조화 결과가 Week 3 `save_structured_request` 저장 payload로 활용 가능한지 확인한다. |
 
 ### 자주 발생하는 오류
 
@@ -82,12 +85,14 @@
 - 멤버 정보를 문자열 하나로 처리하는 경우
 - LLM이 생성한 텍스트만 사용하고 schema 검증을 하지 않는 경우
 - 애매한 요청을 무리하게 실행 가능한 요청으로 분류하는 경우
+- Week 3 이상에서 재사용되는 `extract_schedule_request`가 중첩 Week 2 agent를 새로 띄우도록 구현하는 경우
 
 ### 멘토 피드백 방향
 
 - 요청이 일정인지, 할 일인지, 알림인지 먼저 분류 기준을 다시 확인하도록 안내한다.
 - 확실하지 않은 필드는 억지로 채우기보다 `None` 처리하는 것이 안전하다고 안내한다.
-- 구조화 결과가 1주차 일정 생성 Tool에 바로 들어갈 수 있는 형태인지 확인하도록 유도한다.
+- 구조화 결과가 `kind`, `title`, `date`, `start_time`, `end_time`, `members`를 갖춘 저장 payload인지 확인하도록 유도한다.
+- Week 3 이상에서 쓰는 `extract_structured_request()`는 agent가 아니라 `chat_model().with_structured_output(...)` 직접 호출 경로라는 점을 짚어준다.
 
 ### 최종 컨펌 기준
 
@@ -110,17 +115,20 @@
 | 확인 항목 | 멘토 체크 포인트 |
 |---|---|
 | 요청 저장 | structured payload가 SQLite에 저장되는지 확인한다. |
+| 저장 전 구조화 | raw 자연어, `extract_schedule_request` 전체 payload, 이미 정리된 dict가 모두 `StructuredRequest` 기준 payload로 정리된 뒤 저장되는지 확인한다. |
 | Request Log | 원본 요청, 요청 종류, 실행 상태, 저장 데이터가 추적 가능한지 확인한다. |
 | 저장 위치 분리 | `kind`에 따라 일정, 할 일, 알림 데이터가 적절히 나뉘어 저장되는지 확인한다. |
 | 조건 조회 | `kind`, 날짜 범위, request id 기준으로 조회가 가능한지 확인한다. |
 | 일정 삭제 | 일정 ID, 날짜, 제목, 시간 조건으로 삭제 대상이 정확히 선택되는지 확인한다. |
 | DB 검증 | DB row와 Tool 반환 결과가 일치하는지 확인한다. |
 
-`personal_delete_schedule_by_query`는 기존 하네스 호환 helper이므로 핵심 TODO 구현 대상에서 제외하고, 동작 보존 여부만 확인한다.
+`save_structured_request`는 저장 전 `normalize_structured_request_payload()`를 거쳐야 합니다. 멘토는 SQLite에 들어간 `raw_json`이 `extract_schedule_request`의 outer payload가 아니라 내부 `structured_request` 기준으로 저장되는지 확인합니다.
 
 ### 자주 발생하는 오류
 
 - 요청은 저장되지만 실제 일정 데이터와 연결되지 않는 경우
+- 저장 전 구조화를 생략해 `ok`, `tool_name`, `structured_request` 같은 wrapper 필드가 SQLite 원본 row로 들어가는 경우
+- 자연어 문자열을 그대로 SQLite에 넣으려다 schema 검증 없이 저장하는 경우
 - 모든 요청을 하나의 테이블에만 저장하는 경우
 - 필터 조회가 전체 조회처럼 동작하는 경우
 - 삭제 조건이 너무 넓어 여러 일정이 한꺼번에 삭제되는 경우
@@ -129,12 +137,14 @@
 ### 멘토 피드백 방향
 
 - 요청 기록과 실제 저장 데이터가 어떤 ID로 연결되는지 확인하도록 안내한다.
+- 저장 도구가 입력을 바로 DB에 넣는 것이 아니라 `StructuredRequest.model_validate(...)` 가능한 형태로 정리한 뒤 저장해야 함을 안내한다.
 - `kind`별로 저장 위치가 달라져야 하는 이유를 코드에서 확인하게 한다.
 - 삭제 전에는 삭제 후보를 확인하고, 삭제 후에는 row 변화를 비교하도록 안내한다.
 
 ### 최종 컨펌 기준
 
 - structured request가 SQLite에 저장된다.
+- 저장 직전 payload가 `StructuredRequest` 기준으로 정리되고 검증된다.
 - 저장된 요청을 조건별로 조회할 수 있다.
 - request id로 단건 조회가 가능하다.
 - 저장된 일정 삭제가 정확히 동작한다.
@@ -147,7 +157,7 @@
 
 ### 핵심 과제
 
-`add_personal_reference`, `search_personal_references`, `search_saved_requests`로 개인 참고자료와 저장된 요청을 검색해 RAG 근거 payload를 만든다.
+`add_personal_reference`, `search_personal_references`, `search_saved_requests`, `search_conversation_messages`로 개인 참고자료, 저장된 요청, 앱 채팅 메시지를 구분 검색해 RAG 근거 payload를 만든다.
 
 ### 멘토가 꼭 봐야 할 것
 
@@ -156,15 +166,17 @@
 | 참고자료 저장 | 제목, 내용, 태그가 포함된 개인 참고자료가 저장되는지 확인한다. |
 | 참고자료 검색 | 질문과 관련 있는 reference hit가 반환되는지 확인한다. |
 | 저장 요청 검색 | SQLite에 저장된 요청 또는 일정이 검색 가능한지 확인한다. |
+| 대화 메시지 검색 | 일반 채팅 발화 검색은 `search_conversation_messages`의 top-level `rows`를 사용하는지 확인한다. |
 | 검색 결과 구분 | ChromaDB reference hit와 SQLite saved request hit의 차이를 이해했는지 확인한다. |
-| Payload 계약 | `search_personal_references`는 top-level `hits`, `search_saved_requests`는 top-level `rows`를 반환하는지 확인한다. |
+| Payload 계약 | `search_personal_references`는 top-level `hits`, `search_saved_requests`와 `search_conversation_messages`는 top-level `rows`를 반환하는지 확인한다. |
 | 검색 실험 | 검색어, limit, 조건을 바꿨을 때 결과가 달라지는지 확인한다. |
 
-`search_nana_memory`는 compatibility helper로 남겨 두는 통합 검색이며, 핵심 TODO 구현 대상은 아니다.
+`search_nana_memory`는 compatibility helper로 남겨 두는 통합 검색이며, 핵심 TODO 구현 대상은 아니다. 일반 채팅 발화 검색은 저장 요청 검색과 구분해 `search_conversation_messages`를 사용해야 한다.
 
 ### 자주 발생하는 오류
 
 - 참고자료만 검색되고 저장 일정 검색이 빠지는 경우
+- 일반 채팅 발화를 `search_saved_requests`로 찾으려는 경우
 - 검색 결과는 있지만 context에 반영되지 않는 경우
 - 출처 정보나 title이 빠져 답변 근거로 쓰기 어려운 경우
 - 검색 결과가 없을 때 빈 응답을 제대로 처리하지 못하는 경우
@@ -182,6 +194,7 @@
 - 개인 참고자료를 저장하고 검색할 수 있다.
 - SQLite에 저장된 요청 또는 일정도 검색할 수 있다.
 - `hits`와 `rows` payload가 답변 근거로 사용된다.
+- 저장 요청 검색과 일반 채팅 메시지 검색의 출처 차이를 설명할 수 있다.
 - 검색 결과에 출처 또는 근거가 포함된다.
 - 검색 조건 변경 실험을 수행했다.
 - 학습일지에 검색 실패 사례와 개선 방향이 정리되어 있다.
@@ -192,7 +205,7 @@
 
 ### 핵심 과제
 
-`search_previous_conversations`, `load_conversation_messages`, `extract_schedules_from_history`, `create_shared_schedule`, `delete_shared_schedule`, `collect_member_schedules`로 외부 대화 기록을 검색하고, 대화에서 일정 후보와 멤버별 가능 시간을 추출한다.
+`search_previous_conversations`, `load_conversation_messages`, `extract_schedules_from_history`, `create_shared_schedule`, `delete_shared_schedule`, `list_shared_schedules`, `collect_member_schedules`로 외부 대화 기록과 공유 일정 저장소를 MCP wrapper tool로 다룬다.
 
 ### 멘토가 꼭 봐야 할 것
 
@@ -204,9 +217,11 @@
 | 일정 추출 | 날짜, 시간, 멤버, 가능 여부 표현이 추출되는지 확인한다. |
 | 멤버 alias | A/B/C 같은 alias가 실제 멤버 이름으로 변환되는지 확인한다. |
 | 일정 통합 | 내 일정과 외부 멤버 일정이 함께 정리되는지 확인한다. |
+| 공유 일정 저장소 | `create_shared_schedule`, `delete_shared_schedule`, `list_shared_schedules`가 MCP tool interface로 동작하는지 확인한다. |
 | trace 확인 | 대화 검색, 메시지 로드, 일정 추출 Tool 호출 순서가 trace에 남는지 확인한다. |
 
 `mcp_server/sqlite_mcp_server.py`의 `@mcp.tool` 구현은 학생 구현 대상이 아니며, Week 5 wrapper tool이 호출하는 기준 구현으로 유지한다.
+Week 5 agent는 Week 1~5 누적 tool을 한 agent에 공개하는 단일 agent입니다. 외부 SQLite에 직접 SQL을 날리지 않고 `call_mcp_tool_sync(...)` 또는 `call_external_tool_payload(...)` wrapper 경로를 쓰는지 확인합니다.
 
 ### 자주 발생하는 오류
 
@@ -214,6 +229,7 @@
 - conversation id 없이 메시지 로드를 시도하는 경우
 - 검색된 대화와 일정 후보 추출 결과가 연결되지 않는 경우
 - 멤버별 일정은 추출했지만 내 개인 일정과 합치지 않는 경우
+- 공유 일정 저장소 row를 확인해야 하는 상황에서 `list_shared_schedules`를 누락하는 경우
 - 날짜 범위 조건이 일정 추출에 반영되지 않는 경우
 
 ### 멘토 피드백 방향
@@ -229,6 +245,7 @@
 - 메시지에서 날짜, 시간, 참석자, 가능 여부를 추출할 수 있다.
 - 멤버별 일정 정보가 정리된다.
 - 내 일정과 외부 멤버 일정이 함께 rows 형태로 수집된다.
+- 공유 일정 생성, 삭제, 조회 wrapper가 MCP tool 결과를 그대로 보존한다.
 - trace에서 MCP/외부 Tool 호출 흐름을 확인할 수 있다.
 
 ---
@@ -237,29 +254,31 @@
 
 ### 핵심 과제
 
-`decide_final_slot`, `nana_agent`, `kana_agent`를 구현해 supervisor가 요청에 맞는 agent로 위임하고 최종 일정 후보를 결정하도록 한다.
+`find_common_available_slots`, `decide_final_slot`, `nana_agent`, `kana_agent`를 구현해 supervisor가 요청에 맞는 agent로 위임하고 최종 일정 후보를 결정하도록 한다.
 
 ### 멘토가 꼭 봐야 할 것
 
 | 확인 항목 | 멘토 체크 포인트 |
 |---|---|
 | 역할 분리 | Nana는 개인 일정/RAG, Kana는 그룹 일정 조율을 담당하는지 확인한다. |
-| Tool 노출 | `nana_tools`, `kana_tools`, `supervisor_tools`가 각 역할에 맞게 구성되었는지 확인한다. |
+| Tool 노출 | Nana는 Week 4 개인 도구, Kana는 `kana_tools()`, supervisor는 `supervisor_tools()`의 위임 도구만 볼 수 있는지 확인한다. |
 | Routing | 개인 요청은 Nana, 그룹 일정 요청은 Kana로 위임되는지 확인한다. |
 | 일정 수집 | 그룹 요청에서 멤버 일정 수집이 먼저 이루어지는지 확인한다. |
 | 후보 비교 | busy-time rows를 바탕으로 가능한 시간을 판단하는지 확인한다. |
+| 후보 검증 | `find_common_available_slots`가 Kana agent가 고른 `candidate_slots`를 검증하고 근거 rows를 보존하는지 확인한다. |
 | 최종 제안 | `decide_final_slot`이 `final_slot`, 이유, 후보 목록을 payload로 반환하는지 확인한다. |
 | trace 검증 | supervisor trace와 sub-agent trace에서 호출 흐름을 확인한다. |
 | golden 검증 | 최종 scenario가 깨지지 않았는지 확인한다. |
 
-`find_common_available_slots`와 `propose_group_schedule`은 compatibility helper로 남겨 기능을 유지하지만 핵심 TODO 구현 대상은 아니다.
+`propose_group_schedule`은 compatibility helper로 남겨 기능을 유지하지만 핵심 TODO 구현 대상은 아니다. `week06_system_prompt()`는 supervisor prompt이며, Nana/Kana sub-agent는 각각 `nana_system_prompt()`, `kana_system_prompt()`를 사용한다.
 
 ### 자주 발생하는 오류
 
 - supervisor가 Nana/Kana에게 위임하지 않고 직접 모든 Tool을 호출하는 경우
 - Nana와 Kana의 Tool 목록이 섞이는 경우
+- supervisor prompt를 sub-agent가 그대로 공유한다고 가정해 역할별 지시가 충돌하는 경우
 - 그룹 일정 요청인데 개인 일정 Tool만 호출되는 경우
-- 가능 시간 비교 없이 바로 임의의 시간을 제안하는 경우
+- `find_common_available_slots` 없이 바로 임의의 시간을 제안하는 경우
 - 최종 제안에 `final_slot`, `reason`, `candidates`가 없거나 근거가 부족한 경우
 - trace에서 어떤 agent가 선택되었는지 확인할 수 없는 경우
 
@@ -267,6 +286,7 @@
 
 - supervisor는 직접 모든 일을 처리하는 역할이 아니라 적절한 agent에게 위임하는 역할임을 안내한다.
 - Nana와 Kana의 책임을 다시 나누고, 각 agent가 사용할 Tool 목록을 점검하도록 유도한다.
+- supervisor prompt와 sub-agent 전용 prompt가 분리되어 있음을 확인하도록 안내한다.
 - 최종 일정 제안은 후보 비교와 근거가 있어야 하며, 왜 그 시간이 선택됐는지 payload에 남겨야 한다고 안내한다.
 
 ### 최종 컨펌 기준
@@ -274,6 +294,7 @@
 - Nana/Kana 역할이 명확히 분리되어 있다.
 - supervisor가 요청 유형에 따라 적절한 agent를 선택한다.
 - 그룹 일정 요청에서 멤버 일정 수집 → 후보 비교 → 최종 제안 흐름이 이어진다.
+- `find_common_available_slots`와 `decide_final_slot`이 busy rows와 candidate payload를 근거로 이어진다.
 - 최종 payload에 `final_slot`, `reason`, `candidates`가 포함된다.
 - trace에서 agent와 Tool 호출 흐름을 확인할 수 있다.
 - `./run.sh --golden` 또는 최종 통합 검증을 수행했다.
@@ -334,8 +355,8 @@
 
 | 연결 구간 | 멘토가 확인할 점 |
 |---|---|
-| 1주차 → 2주차 | 일정 생성 payload가 구조화 요청 schema와 연결될 수 있는가? |
-| 2주차 → 3주차 | `StructuredRequest` 결과가 SQLite 저장 payload로 사용할 수 있는가? |
+| 1주차 → 2주차 | Week 1 일정 필드(title/date/time/attendees)가 Week 2 구조화 schema의 어떤 필드와 대응되는가? |
+| 2주차 → 3주차 | `StructuredRequest` 결과가 저장 전 정규화 payload로 쓰이고, `save_structured_request`가 SQLite 저장 전에 이를 검증하는가? |
 | 3주차 → 4주차 | 저장된 요청과 일정이 검색 가능한 형태로 남는가? |
 | 4주차 → 5주차 | 개인 참고자료 검색과 외부 대화 검색의 데이터 출처 차이를 이해했는가? |
 | 5주차 → 6주차 | 멤버별 일정 rows가 그룹 일정 결정 입력으로 충분한가? |

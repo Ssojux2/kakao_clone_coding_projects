@@ -23,6 +23,7 @@ from student_parts.week06_kanamate_decides_schedule import (
     kana_system_prompt,
     nana_system_prompt,
     supervisor_system_prompt,
+    week06_system_prompt,
 )
 
 
@@ -98,14 +99,33 @@ def test_week3_plus_prompts_use_sqlite_directly_for_create_and_lookup() -> None:
 
 def test_week_system_prompts_accumulate_previous_weeks() -> None:
     assert "현재 채팅 기억" in week01_system_prompt()
+    assert "Week 1 Nana 일정 agent" in week02_system_prompt()
     assert "Week 2 요청 구조화 agent" in week02_system_prompt()
     assert "StructuredRequest" in week02_system_prompt()
+    assert "Week 1 Nana 일정 agent" in week03_system_prompt()
     assert "Week 2 요청 구조화 agent" in week03_system_prompt()
     assert "최종 답변은 자연어" in week03_system_prompt()
     assert "앱 SQLite DB에 저장된 일정" in week03_system_prompt()
     assert "Week 3 Nana logbook agent" in week04_system_prompt()
     assert "Week 4 Nana memory agent" in week05_system_prompt()
     assert "Week 5 Kana history agent" in supervisor_system_prompt()
+
+
+def test_week6_system_prompt_is_supervisor_prompt_and_subagents_are_separate() -> None:
+    supervisor_prompt = supervisor_system_prompt()
+    nana_prompt = nana_system_prompt()
+    kana_prompt = kana_system_prompt()
+
+    assert week06_system_prompt() == supervisor_prompt
+    assert "Week 1 Nana 일정 agent" in supervisor_prompt
+    assert "Week 5 Kana history agent" in supervisor_prompt
+    assert "Week 6 supervisor agent" in supervisor_prompt
+    assert "Nana/Kana 하위 에이전트는 각자 별도 system prompt를 사용한다" in supervisor_prompt
+
+    assert "supervisor는 nana_agent와 kana_agent 위임 도구만 볼 수 있다" not in nana_prompt
+    assert "supervisor는 nana_agent와 kana_agent 위임 도구만 볼 수 있다" not in kana_prompt
+    assert "supervisor prompt를 공유하지 않는 Nana 전용 system prompt" in nana_prompt
+    assert "supervisor prompt를 공유하지 않는 Kana 전용 system prompt" in kana_prompt
 
 
 def test_week_tool_lists_accumulate_previous_weeks() -> None:

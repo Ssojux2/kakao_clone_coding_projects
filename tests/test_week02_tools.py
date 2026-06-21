@@ -77,6 +77,47 @@ def test_week02_agent_uses_structured_response_format(monkeypatch) -> None:
     assert captured["tools"] == []
 
 
+def test_extract_schedule_request_uses_structured_model_without_nested_agent(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    class FakeStructuredModel:
+        def invoke(self, messages: list[dict[str, str]]) -> week02_module.StructuredRequest:
+            seen["messages"] = messages
+            return week02_module.StructuredRequest(
+                kind="personal_schedule",
+                title="개인 집중 작업",
+                date="2026-05-21",
+                start_time="10:00",
+                end_time="11:00",
+                members=[],
+                reason="테스트 structured model",
+                original_text=messages[-1]["content"],
+            )
+
+    class FakeModel:
+        def with_structured_output(self, schema: object, *, method: str) -> FakeStructuredModel:
+            seen["schema"] = schema
+            seen["method"] = method
+            return FakeStructuredModel()
+
+    def fail_if_nested_agent_is_built() -> object:
+        raise AssertionError("extract_schedule_request should not build a nested Week 2 agent")
+
+    monkeypatch.setattr(week02_module, "chat_model", lambda: FakeModel())
+    monkeypatch.setattr(week02_module, "build_week02_agent", fail_if_nested_agent_is_built)
+
+    result = json.loads(
+        week02_module.extract_schedule_request.invoke(
+            {"query": "2026-05-21 오전 10시에 개인 집중 작업 일정을 1시간 잡아줘"}
+        )
+    )
+
+    assert seen["schema"] is week02_module.StructuredRequest
+    assert seen["method"] == "function_calling"
+    assert seen["messages"][0]["role"] == "system"
+    assert result["structured_request"]["title"] == "개인 집중 작업"
+
+
 def test_structured_response_renders_as_class_info() -> None:
     structured = week02_module.StructuredRequest(
         kind="personal_schedule",

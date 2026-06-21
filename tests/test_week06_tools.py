@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import json
 from contextvars import Context
+from dataclasses import replace
+from datetime import timedelta
 from types import SimpleNamespace
 
-import fixed.runtime_clock as runtime_clock
 import fixed.agent_runtime as runtime_module
+import fixed.runtime_clock as runtime_clock
 import fixed.week_agent_registry as agent_registry
+import student_parts.week03_build_nanas_logbook as week03_module
 from fixed.agent_runtime import AgentRuntime
 from fixed.app_store import AppSQLiteStore
+from fixed.external_people_store import (
+    JULY_PRACTICE_DATE_FROM,
+    JULY_PRACTICE_DATE_TO,
+    JULY_PRACTICE_MEMBER_NAMES,
+)
 from fixed.schedule_decision import busy_rows_overlap, parse_time_minutes
 from fixed.session_scope import current_session_scope
 from fixed.week_agent_registry import ActiveWeekAgentResult, ActiveWeekAgentStreamEvent
@@ -18,6 +26,7 @@ from student_parts.week06_kanamate_decides_schedule import (
     decide_final_slot,
     find_common_available_slots,
     find_common_available_slots_dict,
+    nana_agent,
 )
 
 
@@ -58,6 +67,51 @@ def test_week06_kana_tools_include_slot_decision_chain() -> None:
         "find_common_available_slots",
         "decide_final_slot",
     } <= kana_tools
+
+
+def test_week06_nana_direct_schedule_lookup_reads_sqlite(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "app.sqlite3"
+    monkeypatch.setenv("KANANA_EXTERNAL_DB_PATH", str(tmp_path / "external.sqlite3"))
+    monkeypatch.setattr(week03_module, "CONFIG", replace(week03_module.CONFIG, app_db_path=db_path))
+    tomorrow = (runtime_clock.current_app_date() + timedelta(days=1)).isoformat()
+    store = AppSQLiteStore(db_path)
+    store.save_structured_request(
+        {
+            "kind": "personal_schedule",
+            "title": "미팅",
+            "date": tomorrow,
+            "start_time": "10:00",
+            "end_time": None,
+            "members": [],
+            "original_text": "내일 10시에 미팅 잡아줘.",
+        }
+    )
+    store.save_structured_request(
+        {
+            "kind": "group_schedule",
+            "title": "공유 팀 회의",
+            "date": tomorrow,
+            "start_time": "15:00",
+            "end_time": "16:00",
+            "members": ["민준", "서연"],
+            "original_text": "내일 15시에 민준 서연과 팀 회의 잡아줘.",
+        }
+    )
+
+    result = json.loads(nana_agent.invoke({"query": "내일 내 일정이 뭐야?"}))
+
+    assert result["mode"] == "deterministic_schedule_lookup"
+    assert result["inner_tool_names"] == ["personal_list_saved_schedules"]
+    assert "미팅" in result["answer"]
+    assert "공유 팀 회의" not in result["answer"]
+    assert "저장된 일정이 없습니다" not in result["answer"]
+
+    all_result = json.loads(nana_agent.invoke({"query": "내 일정 전체 조회해줘."}))
+
+    assert all_result["mode"] == "deterministic_schedule_lookup"
+    assert "현재 저장된 일정은 다음과 같습니다." in all_result["answer"]
+    assert "미팅" in all_result["answer"]
+    assert "공유 팀 회의" not in all_result["answer"]
 
 
 def test_week06_slot_tools_expose_payload_contract_in_descriptions() -> None:
@@ -307,16 +361,16 @@ def test_week05_external_schedule_tool_lists_all_times(tmp_path, monkeypatch) ->
     payload = json.loads(
         extract_schedules_from_history.invoke(
             {
-                "member_names": ["철수", "영희"],
-                "date_from": runtime_clock.next_weekday_iso(1),
-                "date_to": runtime_clock.next_weekday_iso(3),
+                "member_names": JULY_PRACTICE_MEMBER_NAMES,
+                "date_from": JULY_PRACTICE_DATE_FROM,
+                "date_to": JULY_PRACTICE_DATE_TO,
             }
         )
     )
     summary = payload["schedule_summary"]
 
-    assert f"{runtime_clock.next_weekday_iso(1)} 11:00-12:00" in summary
-    assert f"{runtime_clock.next_weekday_iso(2)} 13:00-14:00" in summary
-    assert f"{runtime_clock.next_weekday_iso(2)} 15:00-16:00" in summary
-    assert f"{runtime_clock.next_weekday_iso(3)} 14:00-15:00" in summary
-    assert f"{runtime_clock.next_weekday_iso(3)} 16:00-17:00" in summary
+    assert "2026-07-07 10:00-11:00" in summary
+    assert "2026-07-08 09:30-10:30" in summary
+    assert "2026-07-10 14:00-15:00" in summary
+    assert "2026-07-15 16:00-17:00" in summary
+    assert "2026-07-17 09:00-10:00" in summary

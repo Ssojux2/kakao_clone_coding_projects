@@ -17,7 +17,9 @@ class FakeStore:
     def list_conversations(self) -> list[dict[str, str]]:
         return self.rows
 
-    def list_schedules(self, limit: int = 12) -> list[dict[str, Any]]:
+    def list_schedules(self, limit: int = 12, kind: str | None = None) -> list[dict[str, Any]]:
+        if kind:
+            return [row for row in self.schedule_rows if row.get("request_kind") in {None, kind}][:limit]
         return self.schedule_rows[:limit]
 
 

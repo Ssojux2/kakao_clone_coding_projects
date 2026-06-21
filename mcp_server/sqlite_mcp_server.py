@@ -140,7 +140,10 @@ def list_shared_schedules(
     source_conversation_id: str | None = None,
     limit: int = 50,
 ) -> str:
-    """공유 일정 저장소에 등록된 일정을 멤버/날짜/source 기준으로 조회합니다."""
+    """공유 일정 저장소에 등록된 일정을 멤버/날짜/source 기준으로 조회합니다.
+
+    필터가 없으면 오래된 앱 동기화 row 대신 기본 공유 일정을 반환합니다.
+    """
 
     rows = STORE.list_shared_schedules(
         member_names=member_names,

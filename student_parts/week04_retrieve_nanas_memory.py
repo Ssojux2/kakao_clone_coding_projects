@@ -26,6 +26,20 @@ _WEEK04_AGENT: Any | None = None
 #   Nana가 "내가 적어 둔 참고자료"와 "SQLite에 저장된 일정/할 일 기록"을 구분해서 검색하게 합니다.
 #   Week 4의 핵심은 RAG를 하나의 마법 함수로 보지 않고, 데이터 출처별 검색 tool을 분리하는 것입니다.
 #
+# 구현 위치와 사용할 코드
+#   - 이 파일(student_parts/week04_retrieve_nanas_memory.py)의 개인 참고자료/RAG tool을 구현합니다.
+#   - 개인 참고자료 저장소는 fixed/reference_store.py의 PersonalReferenceStore이며,
+#     이 파일 상단의 REFERENCE_STORE가 CONFIG.chroma_dir 기준 인스턴스입니다.
+#   - SQLite 저장 요청 검색은 fixed/app_store.py의 AppSQLiteStore를 사용하고,
+#     이 파일 상단의 SQLITE_STORE가 CONFIG.app_db_path 기준 인스턴스입니다.
+#   - add_personal_reference_payload(), search_personal_reference_hits(),
+#     search_saved_request_rows(), search_conversation_message_rows()에 실제 호출/정규화 로직을 둡니다.
+#   - tool 함수 add_personal_reference/search_personal_references/search_saved_requests는
+#     위 helper 결과를 json_payload()로 감싼 JSON 문자열로 반환합니다.
+#   - top_k/limit 보정은 이 파일의 safe_limit()를 사용해 tool 안에서 처리합니다.
+#   - week04_tools()는 student_parts/week03_build_nanas_logbook.py의 week03_tools() 위에
+#     Week 4 RAG tool을 누적해 agent에 공개합니다.
+#
 # 구현 대상
 #   1. add_personal_reference
 #      - title/content/tags를 REFERENCE_STORE.add_personal_reference에 넘깁니다.

@@ -67,6 +67,62 @@ def sync_personal_schedule_to_shared(schedule: dict[str, Any]) -> dict[str, Any]
         }
 
 
+def sync_group_schedule_to_shared(schedule: dict[str, Any]) -> dict[str, Any]:
+    """앱 DB의 확정 그룹 일정을 참석자별 공유 busy-time row로 동기화합니다."""
+
+    if not schedule.get("date"):
+        return {
+            "ok": False,
+            "status": "skipped",
+            "reason": "공유 일정 등록에는 날짜가 필요합니다.",
+        }
+
+    members = [str(member).strip() for member in (schedule.get("attendees") or []) if str(member).strip()]
+    if not members:
+        return {
+            "ok": True,
+            "status": "skipped",
+            "reason": "공유할 참석자가 없습니다.",
+            "shared_schedules": [],
+        }
+
+    shared_schedules: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    attendee_text = ", ".join(members)
+    for index, member_name in enumerate(members):
+        try:
+            payload = call_external_tool_payload(
+                "create_shared_schedule",
+                {
+                    "member_name": member_name,
+                    "title": schedule.get("title") or "제목 없음",
+                    "date": schedule.get("date"),
+                    "start_time": schedule.get("start_time") or "미정",
+                    "end_time": schedule.get("end_time") or "미정",
+                    "notes": f"앱 그룹 일정 자동 동기화 · 참석자: {attendee_text}",
+                    "source_conversation_id": f"group:{schedule['request_id']}:{member_name}",
+                    "schedule_id": f"shared_{schedule['schedule_id']}_{index}",
+                },
+            )
+            shared_schedules.append(payload.get("shared_schedule", {}))
+        except Exception as exc:
+            errors.append(
+                {
+                    "member_name": member_name,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
+
+    return {
+        "ok": not errors,
+        "status": "failed" if errors else "synced",
+        "tool_name": "create_shared_schedule",
+        "shared_schedules": shared_schedules,
+        "errors": errors,
+    }
+
+
 def delete_personal_schedule_from_shared(request_id: str) -> dict[str, Any]:
     """앱 request_id에 연결된 외부 공유 일정 복사본을 삭제합니다."""
 
@@ -86,3 +142,37 @@ def delete_personal_schedule_from_shared(request_id: str) -> dict[str, Any]:
             "error_type": type(exc).__name__,
             "error": str(exc),
         }
+
+
+def delete_group_schedule_from_shared(schedule: dict[str, Any]) -> dict[str, Any]:
+    """앱 그룹 일정 request_id와 참석자 기준으로 공유 일정 복사본을 삭제합니다."""
+
+    request_id = str(schedule.get("request_id") or "").strip()
+    if not request_id:
+        return {"ok": True, "tool_name": "delete_shared_schedule", "deleted": []}
+
+    deleted: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    members = [str(member).strip() for member in (schedule.get("attendees") or []) if str(member).strip()]
+    for member_name in members:
+        try:
+            payload = call_external_tool_payload(
+                "delete_shared_schedule",
+                {"source_conversation_id": f"group:{request_id}:{member_name}"},
+            )
+            deleted.extend(payload.get("deleted", []))
+        except Exception as exc:
+            errors.append(
+                {
+                    "member_name": member_name,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
+
+    return {
+        "ok": not errors,
+        "tool_name": "delete_shared_schedule",
+        "deleted": deleted,
+        "errors": errors,
+    }

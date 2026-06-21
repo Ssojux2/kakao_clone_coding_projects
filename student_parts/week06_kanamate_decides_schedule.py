@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import date, timedelta
 from typing import Any
 
 from langchain.agents import create_agent
@@ -18,7 +20,8 @@ from fixed.schedule_decision import (
 )
 from student_parts.week01_wake_up_nana import join_system_prompt
 from student_parts.week02_structure_natural_language_requests import extract_schedule_request
-from student_parts.week04_retrieve_nanas_memory import week04_tools
+from student_parts.week03_build_nanas_logbook import personal_list_saved_schedules
+from student_parts.week04_retrieve_nanas_memory import week04_prompt_parts, week04_tools
 from student_parts.week05_load_kanas_past_conversations import (
     collect_member_schedules,
     extract_schedules_from_history,
@@ -34,11 +37,39 @@ _KANA_SUBAGENT: Any | None = None
 _SUPERVISOR_AGENT: Any | None = None
 
 
+PERSONAL_SCHEDULE_LOOKUP_TERMS = ("조회", "보여", "알려", "뭐", "무엇", "있", "확인", "목록", "전체")
+PERSONAL_SCHEDULE_MUTATION_TERMS = (
+    "잡아",
+    "추가",
+    "저장",
+    "등록",
+    "만들",
+    "생성",
+    "수정",
+    "변경",
+    "삭제",
+    "지워",
+    "취소",
+)
+
+
 # [수강생 구현 가이드]
 #
 # 목표
 #   Week 6은 "모든 기능을 한 agent가 직접 처리"하지 않고 supervisor가 Nana/Kana 하위 agent로 위임하게 만듭니다.
 #   Nana는 개인 일정/저장/RAG를 맡고, Kana는 외부 대화/멤버 일정/그룹 시간 결정을 맡습니다.
+#
+# 구현 위치와 사용할 코드
+#   - 이 파일(student_parts/week06_kanamate_decides_schedule.py)의 Week 6 전용 tool과 sub-agent wrapper를 구현합니다.
+#   - 공통 가능 시간 검증/최종 선택 payload 생성은 fixed/schedule_decision.py의
+#     find_common_available_slots_payload(), decide_final_slot_payload(), normalize_date_bound()를 사용합니다.
+#   - Nana 하위 agent 도구는 student_parts/week04_retrieve_nanas_memory.py의 week04_tools()를 그대로 사용합니다.
+#   - Kana 하위 agent 도구는 이 파일의 kana_tools()에서 구성하며, Week 2 extract_schedule_request와
+#     Week 5 wrapper tool(search_previous_conversations, extract_schedules_from_history,
+#     collect_member_schedules 등), find_common_available_slots, decide_final_slot을 포함합니다.
+#   - supervisor가 볼 수 있는 도구는 supervisor_tools()의 nana_agent, kana_agent 두 개뿐입니다.
+#   - nana_agent()/kana_agent()/build_langchain_supervisor_agent()는 create_agent(...)로 각각 필요한 agent를 만들고 재사용합니다.
+#   - trace 정리는 fixed/langchain_trace.py의 extract_agent_events(), extract_final_text()를 사용합니다.
 #
 # 구현 대상
 #   1. find_common_available_slots / decide_final_slot
@@ -75,20 +106,20 @@ _SUPERVISOR_AGENT: Any | None = None
 
 
 def week06_system_prompt() -> str:
-    """6주차 supervisor/sub-agent가 공유하는 누적 시스템 프롬프트입니다."""
+    """6주차 supervisor agent가 따르는 시스템 프롬프트입니다."""
 
-    return join_system_prompt(week06_prompt_parts())
+    return supervisor_system_prompt()
 
 
 def week06_prompt_parts() -> list[str]:
-    """1~6주차 system prompt 조각을 누적합니다."""
+    """1~6주차 supervisor system prompt 조각을 누적합니다."""
 
     return [
         *week05_prompt_parts(),
-        "너는 Kanana의 Week 6 multi-agent schedule agent다. "
+        "너는 Kanana의 Week 6 supervisor agent다. "
         f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
-        "Week 6에서도 Week 1~5의 누적 지시를 그대로 따른다. "
-        "프롬프트 정책은 함수별로 따로 나누지 않고 이 Week 6 누적 prompt 하나를 기준으로 판단한다. "
+        "Week 6 supervisor는 Week 1~5의 누적 지시를 바탕으로 사용자의 요청을 하위 에이전트에 위임한다. "
+        "이 Week 6 누적 prompt는 supervisor agent의 system prompt이며, Nana/Kana 하위 에이전트는 각자 별도 system prompt를 사용한다. "
         "현재 실행 중인 agent가 볼 수 있는 도구만 호출하고, 없는 도구 이름을 꾸며내지 않는다. "
         "supervisor는 nana_agent와 kana_agent 위임 도구만 볼 수 있다. "
         "개인 일정 생성/조회/수정/삭제, todo/reminder 저장, 개인 참고자료 검색, 내 앱 대화 목록 검색은 nana_agent에게 위임한다. "
@@ -112,19 +143,21 @@ def week06_prompt_parts() -> list[str]:
         "collect_member_schedules와 extract_schedules_from_history의 rows는 이미 잡힌 회의 목록이 아니라 각 멤버가 참석할 수 없는 busy-time 근거다. "
         "회의 시간을 잡아달라는 요청에서 rows가 비어 있거나 확정 회의가 없다는 이유로 멈추지 말고, "
         "그 rows를 근거로 가능한 후보를 만들어 find_common_available_slots와 decide_final_slot까지 진행한다. "
+        "사용자가 '외부 공유 데이터', '공유 일정 확인', '공유 일정 보여줘'처럼 공유 저장소 row를 묻는 경우 "
+        "되묻지 말고 kana_agent에게 위임해 list_shared_schedules 결과로 답한다. 날짜/멤버가 없으면 tool의 기본 공유 일정 조회 결과를 답한다. "
         "공유 일정 저장소 자체에 등록된 row를 확인해야 하면 list_shared_schedules를 사용한다. "
         "외부 팀원 일정 조회 답변은 tool 결과의 schedule_summary 또는 rows를 기준으로 모든 일정을 빠짐없이 나열한다. "
         "각 일정마다 반드시 멤버, 제목, 날짜, 시작 시간, 종료 시간, 비고를 포함한다. rows에 해당 멤버 일정이 있으면 일정이 없다고 말하지 않는다. "
         "팀원들과 회의 시간을 결정하는 요청이면 search_previous_conversations, extract_schedules_from_history, "
         "find_common_available_slots, decide_final_slot을 필요한 순서로 호출한다. "
         "find_common_available_slots와 decide_final_slot은 내부에서 별도 LLM을 호출하지 않는다. "
-        "Kana 너 자신이 앞선 tool output의 busy_rows를 읽고 candidate_slots, selected_index, final_slot, "
+        "kana_agent는 앞선 tool output의 busy_rows를 읽고 candidate_slots, selected_index, final_slot, "
         "needs_agent_selection, reason payload를 tool argument로 채운다. "
-        "find_common_available_slots Python tool은 네가 넘긴 candidate_slots를 검증/기록만 하며, "
-        "decide_final_slot Python tool도 네가 넘긴 최종 선택 payload를 기록만 한다. "
+        "find_common_available_slots Python tool은 kana_agent가 넘긴 candidate_slots를 검증/기록만 하며, "
+        "decide_final_slot Python tool도 kana_agent가 넘긴 최종 선택 payload를 기록만 한다. "
         "사용자가 회의 시간을 '잡아줘', '정해줘', '결정해줘'라고 요청하면 후보만 보여주고 멈추지 말고, "
-        "검증된 candidate_slots 중 하나를 네가 직접 selected_index와 final_slot으로 골라 decide_final_slot을 반드시 호출한다. "
-        "decide_final_slot을 호출할 때는 find_common_available_slots 결과의 candidate_slots, busy_rows, members, 날짜 범위를 함께 넘긴다. "
+        "kana_agent가 검증된 candidate_slots 중 하나를 selected_index와 final_slot으로 골라 decide_final_slot을 반드시 호출하게 한다. "
+        "kana_agent가 decide_final_slot을 호출할 때는 find_common_available_slots 결과의 candidate_slots, busy_rows, members, 날짜 범위를 함께 넘긴다. "
         "사용자가 후보만 달라고 했을 때만 최종 선택을 보류한다. "
         "decide_final_slot 결과의 needs_agent_selection이 false이고 final_slot이 있으면 추가 확인 질문을 하지 말고 확정된 시간으로 답한다. "
         "최종 회의 시간 결정은 course repo 기준 tool인 decide_final_slot 결과를 근거로 답한다. "
@@ -139,25 +172,78 @@ def week06_prompt_parts() -> list[str]:
     ]
 
 
+def nana_prompt_parts() -> list[str]:
+    """Week 6 Nana 하위 에이전트 전용 system prompt 조각입니다."""
+
+    return [
+        *week04_prompt_parts(),
+        "너는 Kanana의 Week 6 Nana 하위 에이전트다. "
+        f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
+        "이 prompt는 supervisor prompt를 공유하지 않는 Nana 전용 system prompt다. "
+        "현재 실행 중인 agent가 볼 수 있는 도구만 호출하고, 없는 도구 이름을 꾸며내지 않는다. "
+        "개인 일정 생성/조회/수정/삭제, todo/reminder 저장, 개인 참고자료 검색, 내 앱 대화 목록 검색을 담당한다. "
+        "개인 일정 생성 요청이면 extract_schedule_request 결과의 structured_request를 바로 save_structured_request payload로 전달해 앱 DB에 저장한다. "
+        "3주차 이후 SQLite 도구가 등록된 상태에서는 personal_create_schedule을 거쳐 저장하지 않는다. "
+        "구체적인 날짜와 시간이 정해진 회의/미팅 등록 요청은 참석자가 있어도 그룹 조율이 아니라 앱 DB 일정 저장 요청이다. "
+        "extract_schedule_request의 kind가 personal_schedule이든 group_schedule이든 structured_request를 그대로 save_structured_request에 전달해 저장한다. "
+        "kind와 members는 extract_schedule_request의 structured_request를 그대로 근거로 삼는다. "
+        "일정 조회는 personal_list_saved_schedules로 SQLite row를 확인하고, 날짜나 기간이 있으면 date_from/date_to를 YYYY-MM-DD로 채운다. "
+        "personal_list_schedules는 Week 1-2 단순 조회 전용이므로 사용하지 않는다. "
+        "단순 일정 조회에 personal_list_schedules 같은 Week 1-2 인메모리 조회를 사용하지 않는다. "
+        "저장된 개인 일정은 공유 일정에도 자동 동기화된다. 개인 일정 수정/삭제는 반드시 앱 DB에 저장된 내 일정 원본을 기준으로 수행한다. "
+        "새 대화에서도 Week 3 이후 SQLite에 저장된 일정은 조회 가능하다. "
+        "그룹 일정 조율, 여러 사람의 공통 가능 시간 결정, 외부 멤버의 바쁜 시간 조회는 직접 처리하지 말고 담당이 아니라고 짧게 알린다. "
+        "도구 결과에 없는 사실은 만들지 않는다. "
+        "사용자에게는 자연스럽게 답변하고, 에이전트 이름이나 도구 이름은 사용자가 묻지 않는 한 노출하지 않는다.",
+    ]
+
+
+def kana_prompt_parts() -> list[str]:
+    """Week 6 Kana 하위 에이전트 전용 system prompt 조각입니다."""
+
+    return [
+        "너는 Kanana의 Week 6 Kana 하위 에이전트다. "
+        f"현재 날짜는 앱 시작 시 OS에서 읽은 {current_app_date_iso()}이다. "
+        "이 prompt는 supervisor prompt를 공유하지 않는 Kana 전용 system prompt다. "
+        "현재 실행 중인 agent가 볼 수 있는 도구만 호출하고, 없는 도구 이름을 꾸며내지 않는다. "
+        "외부 멤버의 바쁜 시간 조회, 여러 사람의 공통 가능 시간 탐색, 아직 정해지지 않은 회의 시간 조율을 담당한다. "
+        "구체적인 날짜와 시간이 이미 정해진 개인/그룹 일정 등록 요청이면 Nana 저장 담당이라고 짧게 답한다. "
+        "여러 사람의 일정 조율을 시작할 때는 먼저 extract_schedule_request로 날짜와 멤버를 구조화한다. "
+        "이전 대화 원문이 필요하면 search_previous_conversations나 load_conversation_messages를 쓴다. "
+        "멤버별 바쁜 시간은 extract_schedules_from_history 또는 collect_member_schedules로 확인한다. "
+        "collect_member_schedules와 extract_schedules_from_history의 rows는 이미 잡힌 회의 목록이 아니라 각 멤버가 참석할 수 없는 busy-time 근거다. "
+        "회의 시간을 잡아달라는 요청에서 rows가 비어 있거나 확정 회의가 없다는 이유로 멈추지 말고, "
+        "그 rows를 근거로 가능한 후보를 만들어 find_common_available_slots와 decide_final_slot까지 진행한다. "
+        "사용자가 '외부 공유 데이터', '공유 일정 확인', '공유 일정 보여줘'처럼 공유 저장소 row를 묻는 경우 "
+        "되묻지 말고 list_shared_schedules 결과로 답한다. 날짜/멤버가 없으면 tool의 기본 공유 일정 조회 결과를 답한다. "
+        "공유 일정 저장소 자체에 등록된 row를 확인해야 하면 list_shared_schedules를 사용한다. "
+        "외부 팀원 일정 조회 답변은 tool 결과의 schedule_summary 또는 rows를 기준으로 모든 일정을 빠짐없이 나열한다. "
+        "각 일정마다 반드시 멤버, 제목, 날짜, 시작 시간, 종료 시간, 비고를 포함한다. rows에 해당 멤버 일정이 있으면 일정이 없다고 말하지 않는다. "
+        "팀원들과 회의 시간을 결정하는 요청이면 search_previous_conversations, extract_schedules_from_history, "
+        "find_common_available_slots, decide_final_slot을 필요한 순서로 호출한다. "
+        "find_common_available_slots와 decide_final_slot은 내부에서 별도 LLM을 호출하지 않는다. "
+        "Kana 너 자신이 앞선 tool output의 busy_rows를 읽고 candidate_slots, selected_index, final_slot, "
+        "needs_agent_selection, reason payload를 tool argument로 채운다. "
+        "find_common_available_slots Python tool은 네가 넘긴 candidate_slots를 검증/기록만 하며, "
+        "decide_final_slot Python tool도 네가 넘긴 최종 선택 payload를 기록만 한다. "
+        "사용자가 회의 시간을 '잡아줘', '정해줘', '결정해줘'라고 요청하면 후보만 보여주고 멈추지 말고, "
+        "검증된 candidate_slots 중 하나를 네가 직접 selected_index와 final_slot으로 골라 decide_final_slot을 반드시 호출한다. "
+        "decide_final_slot을 호출할 때는 find_common_available_slots 결과의 candidate_slots, busy_rows, members, 날짜 범위를 함께 넘긴다. "
+        "사용자가 후보만 달라고 했을 때만 최종 선택을 보류한다. "
+        "decide_final_slot 결과에 final_slot이 있고 needs_agent_selection이 false이면 사용자에게 다시 묻지 말고 확정형으로 답한다. "
+        "최종 회의 시간 결정은 course repo 기준 tool인 decide_final_slot 결과를 근거로 답한다. "
+        "검색 tool의 query는 코드에서 토큰화하지 않으므로, 질문 전체가 아니라 네가 직접 고른 짧은 핵심 검색 문자열을 넣는다. "
+        "최종 답변에서는 도구 결과와 이전 대화에 실제로 나온 시간만 말하고, 도구 결과와 다른 새 시간이나 상태를 만들어내지 않는다. "
+        "사용자에게는 자연스럽게 답변하고, 에이전트 이름이나 도구 이름은 사용자가 묻지 않는 한 노출하지 않는다.",
+    ]
+
+
 def nana_system_prompt() -> str:
-    return join_system_prompt(
-        [
-            *week06_prompt_parts(),
-            "현재 실행 역할은 Nana 하위 에이전트다. 사용자의 프롬프트를 기준으로 필요한 개인 일정/저장/RAG 도구를 직접 선택한다. "
-            "그룹 일정 조율, 여러 사람의 공통 가능 시간 결정은 직접 처리하지 말고 담당이 아니라고 짧게 알린다.",
-        ]
-    )
+    return join_system_prompt(nana_prompt_parts())
 
 
 def kana_system_prompt() -> str:
-    return join_system_prompt(
-        [
-            *week06_prompt_parts(),
-            "현재 실행 역할은 Kana 하위 에이전트다. 여러 사람의 일정 조율 도구를 직접 선택한다. "
-            "decide_final_slot 결과에 final_slot이 있고 needs_agent_selection이 false이면 사용자에게 다시 묻지 말고 확정형으로 답한다. "
-            "구체적인 날짜와 시간이 이미 정해진 개인/그룹 일정 등록 요청이면 Nana 저장 담당이라고 짧게 답한다.",
-        ]
-    )
+    return join_system_prompt(kana_prompt_parts())
 
 
 def supervisor_system_prompt() -> str:
@@ -166,6 +252,7 @@ def supervisor_system_prompt() -> str:
             *week06_prompt_parts(),
             "현재 실행 역할은 supervisor 에이전트다. 반드시 nana_agent 또는 kana_agent 도구 중 하나를 직접 호출한 뒤, "
             "그 도구 결과만 근거로 최종 답변을 작성한다. "
+            "nana_agent 도구 결과의 mode가 deterministic_schedule_lookup이면 그 answer를 그대로 최종 답변으로 사용한다. "
             "하위 도구 결과 JSON의 final_slot_payload에 final_slot이 있고 needs_agent_selection이 false이면 "
             "하위 answer가 확인 질문처럼 끝나도 final_slot_payload를 우선해 확정형으로 답한다.",
         ]
@@ -209,6 +296,138 @@ def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
 
 def tool_name(tool_object: Any) -> str:
     return getattr(tool_object, "name", getattr(tool_object, "__name__", str(tool_object)))
+
+
+def _compact_query(query: str) -> str:
+    return re.sub(r"\s+", "", query or "")
+
+
+def _is_direct_personal_schedule_lookup(query: str) -> bool:
+    """Week 6 개인 일정 단순 조회는 SQLite를 직접 보게 해 답변 흔들림을 줄입니다."""
+
+    compact = _compact_query(query)
+    if "일정" not in compact:
+        return False
+    if any(term in compact for term in PERSONAL_SCHEDULE_MUTATION_TERMS):
+        return False
+    if not any(term in compact for term in PERSONAL_SCHEDULE_LOOKUP_TERMS):
+        return False
+    return any(term in compact for term in ("내", "나", "저장된", "전체", "오늘", "내일", "모레"))
+
+
+def _date_from_query(query: str) -> tuple[str | None, str | None]:
+    """자주 쓰는 한국어 날짜 표현을 SQLite date filter로 바꿉니다."""
+
+    text = query or ""
+    base_date = date.fromisoformat(current_app_date_iso())
+    if "오늘" in text:
+        return base_date.isoformat(), "오늘"
+    if "내일" in text:
+        return (base_date + timedelta(days=1)).isoformat(), "내일"
+    if "모레" in text:
+        return (base_date + timedelta(days=2)).isoformat(), "모레"
+
+    iso_match = re.search(r"(\d{4})[-./](\d{1,2})[-./](\d{1,2})", text)
+    if iso_match:
+        year, month, day = (int(part) for part in iso_match.groups())
+        return date(year, month, day).isoformat(), None
+
+    korean_match = re.search(r"(?:(\d{4})년\s*)?(\d{1,2})월\s*(\d{1,2})일", text)
+    if korean_match:
+        year_text, month_text, day_text = korean_match.groups()
+        year = int(year_text) if year_text else base_date.year
+        return date(year, int(month_text), int(day_text)).isoformat(), None
+
+    return None, None
+
+
+def _format_korean_date(iso_date: str | None) -> str:
+    if not iso_date:
+        return "날짜 미정"
+    try:
+        parsed = date.fromisoformat(iso_date)
+    except ValueError:
+        return iso_date
+    return f"{parsed.year}년 {parsed.month}월 {parsed.day}일"
+
+
+def _format_schedule_time(row: dict[str, Any]) -> str:
+    start_time = row.get("start_time")
+    end_time = row.get("end_time")
+    if start_time and end_time:
+        return f"{start_time}-{end_time}"
+    if start_time:
+        return str(start_time)
+    return "시간 미정"
+
+
+def _format_schedule_line(row: dict[str, Any]) -> str:
+    title = row.get("title") or "제목 없음"
+    return f"{_format_korean_date(row.get('date'))} {_format_schedule_time(row)} '{title}'"
+
+
+def _answer_from_saved_schedule_rows(
+    rows: list[dict[str, Any]],
+    *,
+    date_filter: str | None,
+    date_label: str | None,
+) -> str:
+    if date_filter:
+        label = f"{date_label} " if date_label else ""
+        date_text = _format_korean_date(date_filter)
+        if not rows:
+            return f"{label}{date_text}에는 저장된 일정이 없습니다."
+        schedule_text = ", ".join(
+            f"{_format_schedule_time(row)}에 '{row.get('title') or '제목 없음'}'" for row in rows
+        )
+        return f"{label}{date_text}에는 {schedule_text} 일정이 있습니다."
+
+    if not rows:
+        return "현재 저장된 전체 일정이 없습니다."
+    lines = ["현재 저장된 일정은 다음과 같습니다."]
+    lines.extend(f"- {_format_schedule_line(row)}" for row in rows)
+    return "\n".join(lines)
+
+
+def _direct_personal_schedule_lookup(query: str) -> dict[str, Any] | None:
+    if not _is_direct_personal_schedule_lookup(query):
+        return None
+
+    date_filter, date_label = _date_from_query(query)
+    args: dict[str, Any] = {
+        "limit": 50,
+        "kind": "personal_schedule",
+        "date_from": date_filter,
+        "date_to": date_filter,
+    }
+    payload = json.loads(personal_list_saved_schedules.invoke(args))
+    answer = _answer_from_saved_schedule_rows(
+        payload.get("schedules") or [],
+        date_filter=date_filter,
+        date_label=date_label,
+    )
+    trace = [
+        {
+            "event": "tool_call",
+            "tool_name": "personal_list_saved_schedules",
+            "arguments": args,
+            "id": "week06_direct_personal_schedule_lookup",
+        },
+        {
+            "event": "tool_result",
+            "tool_name": "personal_list_saved_schedules",
+            "content": payload,
+            "id": "week06_direct_personal_schedule_lookup",
+        },
+    ]
+    return {
+        "ok": True,
+        "selected_agent": "nana_agent",
+        "answer": answer,
+        "trace": trace,
+        "inner_tool_names": ["personal_list_saved_schedules"],
+        "mode": "deterministic_schedule_lookup",
+    }
 
 
 FIND_COMMON_AVAILABLE_SLOTS_DESCRIPTION = (
@@ -441,6 +660,10 @@ def propose_group_schedule(
 @tool
 def nana_agent(query: str) -> str:
     """개인 일정과 개인 RAG 작업을 프롬프트 기반 Nana 하위 에이전트에게 위임합니다."""
+
+    direct_lookup = _direct_personal_schedule_lookup(query)
+    if direct_lookup is not None:
+        return json.dumps(direct_lookup, ensure_ascii=False)
 
     global _NANA_SUBAGENT
     if _NANA_SUBAGENT is None:

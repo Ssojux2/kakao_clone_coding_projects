@@ -28,7 +28,7 @@
 
 학습 목표는 한국어 자연어 입력을 앱이 처리할 수 있는 구조로 바꾸는 것입니다. `StructuredRequest`를 request schema로 보고, `kind`, `title`, `date`, `start_time`, `end_time`, `members`, `priority`, `reason`, `original_text` 필드가 왜 필요한지 확인합니다.
 
-`structured_output_system_prompt`에서는 상대 날짜 기준, 요청 종류, 날짜/시간 형식, 애매한 필드 처리 규칙을 자연어 prompt로 작성합니다. `week02_system_prompt`는 Week 2 대화가 tool 호출 없이 `StructuredRequest`를 최종 structured output으로 반환하도록 정의합니다. `build_week02_agent`에서는 `response_format=StructuredRequest`를 넘겨 LLM structured output 경로를 구성합니다. `extract_schedule_request`는 Week 3 이상에서 DB 저장 tool chain에 재사용할 수 있도록 사용자 prompt를 `base_date`와 `structured_request`가 들어 있는 JSON payload로 감쌉니다.
+`week02_system_prompt`는 Week 1 prompt 위에 요청 구조화 지시를 누적하고, Week 2 대화가 tool 호출 없이 `StructuredRequest`를 최종 structured output으로 반환하도록 정의합니다. `build_week02_agent`에서는 `response_format=StructuredRequest`를 넘겨 LLM structured output 경로를 구성합니다. `extract_schedule_request`는 Week 3 이상에서 DB 저장 tool chain에 재사용할 수 있도록 사용자 prompt를 `base_date`와 `structured_request`가 들어 있는 JSON payload로 감쌉니다.
 
 검증 포인트는 `내일`, `다음 주`, `오후 3시`, `팀원 A/B/C` 같은 표현이 schema 필드로 어떻게 들어가는지 비교하고, 조건문 parser가 아니라 LangChain/OpenAI structured output 결과와 Pydantic 검증이 맞물리는지 확인하는 것입니다.
 
@@ -78,7 +78,7 @@
 
 학습 목표는 multi-agent routing을 역할 분리로 이해하는 것입니다. `nana_agent`는 개인 일정, 저장, 개인 RAG 흐름을 담당하고, `kana_agent`는 여러 사람의 일정 조율을 담당합니다.
 
-`week06_prompt_parts`는 Week 1-5 prompt를 그대로 이어받고 Week 6의 supervisor/sub-agent 판단 기준을 한 덩어리로 추가합니다. `nana_system_prompt`, `kana_system_prompt`, `supervisor_system_prompt`는 이 공통 prompt를 공유하되 현재 실행 역할만 짧게 덧붙입니다. `nana_tools`는 Week 4까지의 개인 도구를 공개하고, `kana_tools`는 `extract_schedule_request`, 외부 대화 검색, 멤버 일정 수집, `find_common_available_slots`, `decide_final_slot`을 공개합니다. `supervisor_tools`는 `nana_agent`, `kana_agent` 위임 도구만 노출합니다.
+`week06_prompt_parts`는 Week 1-5 prompt를 그대로 이어받고 Week 6 supervisor 판단 기준을 추가합니다. `supervisor_system_prompt`는 이 누적 prompt를 사용하고, `nana_system_prompt`와 `kana_system_prompt`는 supervisor prompt를 공유하지 않는 하위 에이전트 전용 prompt를 따로 사용합니다. `nana_tools`는 Week 4까지의 개인 도구를 공개하고, `kana_tools`는 `extract_schedule_request`, 외부 대화 검색, 멤버 일정 수집, `find_common_available_slots`, `decide_final_slot`을 공개합니다. `supervisor_tools`는 `nana_agent`, `kana_agent` 위임 도구만 노출합니다.
 
 `kana_agent`는 외부 대화와 멤버 일정을 확인한 뒤 `find_common_available_slots`에서 LLM structured output으로 후보를 판단하고, 선택한 후보를 `decide_final_slot`에 명시해 최종 `final_slot`, `reason`, `candidates` payload를 반환합니다.
 
