@@ -7,16 +7,19 @@ from langchain.agents import create_agent
 from langchain.tools import tool
 
 from fixed.config import CONFIG
+from fixed.conversation_rag_store import ConversationRAGStore
 from fixed.llm import chat_model
 from fixed.runtime_clock import current_app_date_iso
 from fixed.app_store import AppSQLiteStore
 from fixed.reference_store import PersonalReferenceStore
+from fixed.session_scope import DEFAULT_SESSION_SCOPE, current_session_scope
 from student_parts.week01_wake_up_nana import join_system_prompt
 from student_parts.week03_build_nanas_logbook import week03_prompt_parts, week03_tools
 
 
 REFERENCE_STORE = PersonalReferenceStore(CONFIG.chroma_dir)
 SQLITE_STORE = AppSQLiteStore(CONFIG.app_db_path)
+CONVERSATION_RAG_STORE = ConversationRAGStore(CONFIG.chroma_dir)
 _WEEK04_AGENT: Any | None = None
 
 
@@ -158,14 +161,48 @@ def search_conversation_message_rows(
     top_k: int = 5,
     conversation_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """앱 SQLite에 저장된 일반 채팅 메시지를 검색합니다."""
+    """앱 SQLite에 저장된 일반 채팅 대화 청크를 RAG 검색합니다."""
+
+    return search_conversation_messages_payload(
+        sqlite_store,
+        CONVERSATION_RAG_STORE,
+        query=query,
+        top_k=top_k,
+        conversation_id=conversation_id,
+    )["hits"]
+
+
+def search_conversation_messages_payload(
+    sqlite_store: AppSQLiteStore,
+    conversation_rag_store: ConversationRAGStore,
+    *,
+    query: str,
+    top_k: int = 5,
+    conversation_id: str | None = None,
+) -> dict[str, Any]:
+    """SQLite 대화 목록을 lazy sync한 뒤 ChromaDB conversation RAG payload를 만듭니다."""
 
     limit = safe_limit(top_k, default=5, maximum=50)
-    return sqlite_store.search_conversation_messages(
+    sync = conversation_rag_store.sync_from_sqlite(sqlite_store)
+    active_scope = current_session_scope()
+    exclude_conversation_id = None
+    if not conversation_id and active_scope != DEFAULT_SESSION_SCOPE:
+        exclude_conversation_id = active_scope
+    hits = conversation_rag_store.search(
         query=query,
+        top_k=limit,
+        exclude_conversation_id=exclude_conversation_id,
         conversation_id=conversation_id,
-        limit=limit,
     )
+    return {
+        "ok": True,
+        "tool_name": "search_conversation_messages",
+        "hits": hits,
+        "rows": hits,
+        "context": conversation_rag_store.context_from_hits(hits),
+        "rag_backend": conversation_rag_store.backend_info(),
+        "sync": sync,
+    }
 
 
 @tool
@@ -197,17 +234,16 @@ def search_conversation_messages(
     top_k: int = 5,
     conversation_id: str | None = None,
 ) -> str:
-    """앱 SQLite에 저장된 일반 채팅 메시지 목록을 검색합니다. query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다."""
+    """앱 SQLite 대화 목록을 대화 단위 ChromaDB RAG로 검색합니다. query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다."""
 
     return json_payload(
-        {
-            "rows": search_conversation_message_rows(
-                SQLITE_STORE,
-                query=query,
-                top_k=top_k,
-                conversation_id=conversation_id,
-            )
-        }
+        search_conversation_messages_payload(
+            SQLITE_STORE,
+            CONVERSATION_RAG_STORE,
+            query=query,
+            top_k=top_k,
+            conversation_id=conversation_id,
+        )
     )
 
 
@@ -342,10 +378,12 @@ def week04_prompt_parts() -> list[str]:
         "개인 참고자료 질문은 search_personal_references의 hits를 근거로 답한다. "
         "저장된 일정, 할 일, 알림 질문은 search_saved_requests의 rows를 근거로 답한다. "
         "사용자가 '내가 했던 대화 목록', '이전 채팅', '방금 다른 대화에서 말한 내용'처럼 "
-        "일정/할 일/알림이 아닌 일반 채팅 발화에서 답을 찾으라고 하면 search_conversation_messages의 rows를 근거로 답한다. "
+        "일정/할 일/알림이 아닌 일반 채팅 발화에서 답을 찾으라고 하면 search_conversation_messages의 context와 hits를 근거로 답한다. "
+        "search_conversation_messages는 SQLite 대화 목록을 대화 1개당 1개 청크로 ChromaDB에 lazy sync한 뒤 검색하는 agentic RAG tool이다. "
+        "conversation_id를 넘기지 않으면 현재 실행 중인 대화는 검색 대상에서 제외되고, active와 archived 저장 대화가 모두 검색된다. "
         "일반 채팅 발화 검색 결과가 비어 있으면 search_saved_requests로 넘어가지 말고, 같은 search_conversation_messages에 더 짧은 핵심어로 다시 검색한다. "
-        "search_conversation_messages 결과에는 현재 질문이나 assistant의 추측/부정 답변도 섞일 수 있으므로 "
-        "사용자 role의 단언형 메시지를 우선 근거로 삼고, 질문문만으로 사실을 확정하지 않는다. "
+        "search_conversation_messages 결과에는 과거 assistant 답변도 포함될 수 있으므로 role label을 확인하고, "
+        "사용자 role의 단언형 메시지를 우선 근거로 삼으며 assistant 발화만으로 사실을 확정하지 않는다. "
         "일정 목록이나 내 일정 조회 요청은 Week 3의 personal_list_saved_schedules로 앱 SQLite 일정 row를 확인할 수 있다. "
         "특정 날짜나 기간의 일정 조회는 personal_list_saved_schedules의 date_from/date_to를 YYYY-MM-DD로 채워 조회한다. "
         "personal_list_schedules는 Week 1-2 현재 대화 임시 메모리 조회 전용이므로 Week 4의 단순 일정 조회에는 사용하지 않는다. "
