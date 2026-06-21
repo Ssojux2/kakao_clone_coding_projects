@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import json
 from contextvars import Context
-from dataclasses import replace
-from datetime import timedelta
 from types import SimpleNamespace
 
 import fixed.agent_runtime as runtime_module
 import fixed.runtime_clock as runtime_clock
 import fixed.week_agent_registry as agent_registry
-import student_parts.week03_build_nanas_logbook as week03_module
+import student_parts.week06_kanamate_decides_schedule as week06_module
 from fixed.agent_runtime import AgentRuntime
 from fixed.app_store import AppSQLiteStore
 from fixed.external_people_store import (
@@ -20,13 +18,13 @@ from fixed.external_people_store import (
 from fixed.schedule_decision import busy_rows_overlap, parse_time_minutes
 from fixed.session_scope import current_session_scope
 from fixed.week_agent_registry import ActiveWeekAgentResult, ActiveWeekAgentStreamEvent
+from langchain_core.messages import AIMessage, ToolMessage
 from student_parts.week05_load_kanas_past_conversations import extract_schedules_from_history
 from student_parts.week06_kanamate_decides_schedule import (
     agent_tool_names,
     decide_final_slot,
     find_common_available_slots,
     find_common_available_slots_dict,
-    nana_agent,
 )
 
 
@@ -69,49 +67,55 @@ def test_week06_kana_tools_include_slot_decision_chain() -> None:
     } <= kana_tools
 
 
-def test_week06_nana_direct_schedule_lookup_reads_sqlite(tmp_path, monkeypatch) -> None:
-    db_path = tmp_path / "app.sqlite3"
-    monkeypatch.setenv("KANANA_EXTERNAL_DB_PATH", str(tmp_path / "external.sqlite3"))
-    monkeypatch.setattr(week03_module, "CONFIG", replace(week03_module.CONFIG, app_db_path=db_path))
-    tomorrow = (runtime_clock.current_app_date() + timedelta(days=1)).isoformat()
-    store = AppSQLiteStore(db_path)
-    store.save_structured_request(
-        {
-            "kind": "personal_schedule",
-            "title": "미팅",
-            "date": tomorrow,
-            "start_time": "10:00",
-            "end_time": None,
-            "members": [],
-            "original_text": "내일 10시에 미팅 잡아줘.",
-        }
-    )
-    store.save_structured_request(
-        {
-            "kind": "group_schedule",
-            "title": "공유 팀 회의",
-            "date": tomorrow,
-            "start_time": "15:00",
-            "end_time": "16:00",
-            "members": ["민준", "서연"],
-            "original_text": "내일 15시에 민준 서연과 팀 회의 잡아줘.",
-        }
-    )
+def test_week06_nana_schedule_lookup_uses_prompt_driven_subagent(monkeypatch) -> None:
+    captured: dict[str, object] = {}
 
-    result = json.loads(nana_agent.invoke({"query": "내일 내 일정이 뭐야?"}))
+    class FakeNanaSubagent:
+        def invoke(self, payload: dict[str, object]) -> dict[str, object]:
+            captured["payload"] = payload
+            return {
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "personal_list_saved_schedules",
+                                "args": {"kind": "personal_schedule", "date_from": "2026-06-22"},
+                                "id": "call_1",
+                            }
+                        ],
+                    ),
+                    ToolMessage(
+                        content=json.dumps(
+                            {
+                                "tool_name": "personal_list_saved_schedules",
+                                "schedules": [{"title": "미팅", "date": "2026-06-22"}],
+                            },
+                            ensure_ascii=False,
+                        ),
+                        name="personal_list_saved_schedules",
+                        tool_call_id="call_1",
+                    ),
+                    AIMessage(content="내일은 미팅 일정이 있습니다."),
+                ]
+            }
 
-    assert result["mode"] == "deterministic_schedule_lookup"
+    def fake_create_agent(**kwargs: object) -> FakeNanaSubagent:
+        captured["kwargs"] = kwargs
+        return FakeNanaSubagent()
+
+    monkeypatch.setattr(week06_module, "_NANA_SUBAGENT", None)
+    monkeypatch.setattr(week06_module, "chat_model", lambda: "fake-model")
+    monkeypatch.setattr(week06_module, "create_agent", fake_create_agent)
+
+    result = json.loads(week06_module.nana_agent.invoke({"query": "내일 내 일정이 뭐야?"}))
+    tool_names = {getattr(item, "name", getattr(item, "__name__", str(item))) for item in captured["kwargs"]["tools"]}
+
+    assert result["mode"] == "prompt_driven_subagent"
     assert result["inner_tool_names"] == ["personal_list_saved_schedules"]
-    assert "미팅" in result["answer"]
-    assert "공유 팀 회의" not in result["answer"]
-    assert "저장된 일정이 없습니다" not in result["answer"]
-
-    all_result = json.loads(nana_agent.invoke({"query": "내 일정 전체 조회해줘."}))
-
-    assert all_result["mode"] == "deterministic_schedule_lookup"
-    assert "현재 저장된 일정은 다음과 같습니다." in all_result["answer"]
-    assert "미팅" in all_result["answer"]
-    assert "공유 팀 회의" not in all_result["answer"]
+    assert result["answer"] == "내일은 미팅 일정이 있습니다."
+    assert captured["payload"] == {"messages": [{"role": "user", "content": "내일 내 일정이 뭐야?"}]}
+    assert "personal_list_saved_schedules" in tool_names
 
 
 def test_week06_slot_tools_expose_payload_contract_in_descriptions() -> None:
