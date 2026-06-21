@@ -78,9 +78,9 @@
 
 학습 목표는 multi-agent routing을 역할 분리로 이해하는 것입니다. `nana_agent`는 개인 일정, 저장, 개인 RAG 흐름을 담당하고, `kana_agent`는 여러 사람의 일정 조율을 담당합니다.
 
-`nana_system_prompt`, `kana_system_prompt`, `supervisor_system_prompt`는 각 agent가 어떤 tool chain을 고르는지 안내합니다. `nana_tools`는 Week 4까지의 개인 도구를 공개하고, `kana_tools`는 `extract_schedule_request`, 외부 대화 검색, 멤버 일정 수집, `find_common_available_slots`, `decide_final_slot`을 공개합니다. `supervisor_tools`는 `nana_agent`, `kana_agent` 위임 도구만 노출합니다.
+`week06_prompt_parts`는 Week 1-5 prompt를 그대로 이어받고 Week 6의 supervisor/sub-agent 판단 기준을 한 덩어리로 추가합니다. `nana_system_prompt`, `kana_system_prompt`, `supervisor_system_prompt`는 이 공통 prompt를 공유하되 현재 실행 역할만 짧게 덧붙입니다. `nana_tools`는 Week 4까지의 개인 도구를 공개하고, `kana_tools`는 `extract_schedule_request`, 외부 대화 검색, 멤버 일정 수집, `find_common_available_slots`, `decide_final_slot`을 공개합니다. `supervisor_tools`는 `nana_agent`, `kana_agent` 위임 도구만 노출합니다.
 
-`kana_agent`는 외부 대화와 멤버 일정을 확인한 뒤 `find_common_available_slots`로 후보를 계산하고, 선택한 후보를 `decide_final_slot`에 명시해 최종 `final_slot`, `reason`, `candidates` payload를 반환합니다.
+`kana_agent`는 외부 대화와 멤버 일정을 확인한 뒤 `find_common_available_slots`에서 LLM structured output으로 후보를 판단하고, 선택한 후보를 `decide_final_slot`에 명시해 최종 `final_slot`, `reason`, `candidates` payload를 반환합니다.
 
 검증 포인트는 supervisor trace에서 어떤 agent가 선택됐는지, 하위 agent trace에 `search_previous_conversations`, `extract_schedules_from_history`, `find_common_available_slots`, `decide_final_slot`이 어떤 순서로 호출됐는지, 최종 payload의 `final_slot`, `reason`, `candidates`가 도구 결과와 일치하는지 확인하는 것입니다.
 
@@ -96,13 +96,13 @@
 ## 검증 기준
 
 - Week 1-2도 채팅 런타임 trace에서 LLM이 고른 tool과 JSON payload 모양을 먼저 확인합니다.
-- Week 3 이후는 API key 없이 통과하는 `./run.sh --test`를 기본 자동 검증 기준으로 사용합니다.
+- Week 3 이후는 `./run.sh --test`를 기본 자동 검증 기준으로 사용합니다. Week 6 일정 결정 검증은 LLM structured output 호출을 전제로 합니다.
 - Week 6 마지막에는 `./run.sh --golden`으로 전체 scenario가 깨지지 않았는지 확인합니다.
 
 ## 강사용 준비물
 
 - 강사용 기준본은 실제 OpenAI/SQLite/ChromaDB 경로가 동작하는 완성본으로 유지하고, 학생용 repo와 Week 1-6 branch는 별도로 관리합니다.
 - 학생용 branch에서는 `student_parts/`의 주차별 핵심 `@tool` 함수 구현부가 각 실습의 구현 단위가 됩니다.
-- 수업 전 `./run.sh --test`로 기준본의 오프라인 검증이 통과하는지 확인합니다.
+- 수업 전 `.env`의 `PROXY_TOKEN`을 확인한 뒤 `./run.sh --test`로 기준본 검증이 통과하는지 확인합니다.
 - Week 2와 Week 4의 실제 structured output/embedding 검증은 프록시 서버를 통해 모델 API를 호출하므로, 수업 전 `.env`의 `PROXY_TOKEN`을 확인한 뒤 `./run.sh --integration-test`를 실행합니다.
 - Week 3 이후에는 DB row가 누적될 수 있으므로 수업용 DB를 초기화하거나 복사본을 준비합니다.

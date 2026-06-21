@@ -42,7 +42,7 @@ KANANA_USE_LLM=1
 KANANA_LLM_ASSIST=1
 ```
 
-메인 채팅 화면의 LLM agent 실행은 `PROXY_TOKEN`이 있어야 동작합니다. 채팅은 `CHAT_PROXY_URL`, 임베딩은 `EMBEDDING_PROXY_URL`을 사용합니다. 메인 런타임은 UI 입력과 대화 저장만 담당하고, `KANANA_ACTIVE_WEEK`로 선택된 `student_parts` 주차 agent를 호출합니다. Week 1-5는 각 주차의 단일 agent가 tool 목록을 직접 선택하고, Week 6은 supervisor prompt가 `nana_agent` 또는 `kana_agent` tool로 위임합니다. Week 2는 조건문 분류기 없이 LangChain/OpenAI structured output 경로로 최종 `StructuredRequest`를 직접 반환합니다.
+메인 채팅 화면의 LLM agent 실행은 `PROXY_TOKEN`이 있어야 동작합니다. 채팅은 `CHAT_PROXY_URL`, 임베딩은 `EMBEDDING_PROXY_URL`을 사용합니다. 메인 런타임은 UI 입력과 대화 저장만 담당하고, `KANANA_ACTIVE_WEEK`로 선택된 `student_parts` 주차 agent를 호출합니다. Week 1-5는 각 주차의 단일 agent가 tool 목록을 직접 선택하고, Week 6은 Week 1-5를 이어받은 공통 prompt를 supervisor/sub-agent가 공유하며 `nana_agent` 또는 `kana_agent` tool로 위임합니다. Week 2는 조건문 분류기 없이 LangChain/OpenAI structured output 경로로 최종 `StructuredRequest`를 직접 반환합니다.
 
 ### 패키지 관리
 
@@ -93,8 +93,9 @@ conda 환경이 필요한 경우에는 기존 `environment.yml` 기반 runner를
 - Week 6: `student_parts/week06_kanamate_decides_schedule.py`
   - `decide_final_slot`, `nana_agent`, `kana_agent`
   - prompt-driven supervisor, `nana_agent`, `kana_agent`, tool 기반 sub-agent
+  - `week06_prompt_parts()`는 Week 1-5 prompt를 그대로 누적하고 Week 6 지시를 한 덩어리로 추가합니다.
   - Week 6 파일은 이전 주차 구현을 다시 작성하지 않고 Week 1-5 도구를 import해 sub-agent tool 목록을 조립합니다.
-  - `find_common_available_slots`가 후보를 계산하고, `decide_final_slot`은 agent가 명시한 선택을 최종 `final_slot`, `reason`, `candidates` payload로 반환합니다.
+  - `find_common_available_slots`는 LLM structured output으로 후보를 판단하고, `decide_final_slot`은 agent가 명시한 선택을 최종 `final_slot`, `reason`, `candidates` payload로 반환합니다.
   - 기존 `propose_group_schedule`은 compatibility helper로 남겨 기능을 유지합니다.
 
 강사용 기준본은 실행 가능한 구현을 담고 있습니다. 학생용 실습 repo와 Week 1-6 branch는 별도로 관리합니다. 학생 구현 범위는 각 `student_parts/weekXX_*.py` 파일 최상단의 `[수강생 구현 가이드]`를 기준으로 봅니다.
@@ -113,7 +114,7 @@ pytest 기반 하네스 테스트까지 함께 확인하려면 아래 명령을 
 ./run.sh --test
 ```
 
-특정 주차 환경변수로 테스트하려면 `./run.sh --week6 --test`처럼 주차 인자를 앞에 붙입니다. `--test`는 API key 없이 통과해야 하는 오프라인 pytest를 실행한 뒤 golden harness 검증을 이어서 실행합니다.
+특정 주차 환경변수로 테스트하려면 `./run.sh --week6 --test`처럼 주차 인자를 앞에 붙입니다. `--test`는 pytest를 실행한 뒤 golden harness 검증을 이어서 실행합니다. Week 6 일정 결정 테스트는 LLM structured output 호출을 전제로 하므로 `.env`에 실제 `PROXY_TOKEN`이 필요합니다.
 
 Week 2 structured output과 Week 4 ChromaDB reference 검색 테스트는 프록시 서버를 통해 실제 모델 API를 호출하므로 별도 integration 테스트로 분리되어 있습니다. `.env`에 실제 `PROXY_TOKEN`이 있을 때 아래 명령으로 확인합니다.
 

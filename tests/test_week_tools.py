@@ -6,6 +6,7 @@ from dataclasses import replace
 import fixed.runtime_clock as runtime_clock
 import student_parts.week03_build_nanas_logbook as week03_module
 from fixed.app_store import AppSQLiteStore
+from fixed.schedule_decision import busy_rows_overlap, parse_time_minutes
 from golden_cases import GOLDEN_CASES, find_case_by_input, harness_prompt_examples, sample_prompts
 from student_parts.week01_wake_up_nana import PERSONAL_SCHEDULES, personal_create_schedule, week01_system_prompt, week01_tools
 from student_parts.week02_structure_natural_language_requests import week02_system_prompt, week02_tools
@@ -281,18 +282,31 @@ def test_week6_common_slot_calculation_uses_busy_rows() -> None:
         date_to=target_day,
         duration_minutes=60,
         limit=3,
+        busy_rows=external_rows,
+        candidate_slots=[
+            {
+                "date": target_day,
+                "start_time": "09:00",
+                "end_time": "10:00",
+                "duration_minutes": 60,
+                "reason": "테스트 LLM payload 후보",
+            }
+        ],
+        llm_reason="테스트 후보",
     )
 
     assert result["tool_name"] == "find_common_available_slots"
     assert result["members"] == ["나", "철수", "영희"]
-    assert result["candidate_slots"][0] == {
-        "date": target_day,
-        "start_time": "09:00",
-        "end_time": "10:00",
-        "duration_minutes": 60,
-        "reason": "수집된 busy-time과 겹치지 않는 공통 가능 시간입니다.",
-    }
-    assert all(slot["start_time"] != "11:00" for slot in result["candidate_slots"])
+    assert result["slot_source"] == "llm"
+    assert result["candidate_slots"]
+    for slot in result["candidate_slots"]:
+        start_minutes = parse_time_minutes(slot["start_time"], -1)
+        end_minutes = parse_time_minutes(slot["end_time"], -1)
+        assert slot["date"] == target_day
+        assert start_minutes >= 9 * 60
+        assert end_minutes <= 18 * 60
+        assert end_minutes - start_minutes >= 60
+        assert not busy_rows_overlap(result["busy_rows"], target_day, start_minutes, end_minutes)
 
 
 def test_runtime_clock_uses_os_start_date() -> None:

@@ -9,14 +9,43 @@ import fixed.agent_runtime as runtime_module
 import fixed.week_agent_registry as agent_registry
 from fixed.agent_runtime import AgentRuntime
 from fixed.app_store import AppSQLiteStore
+from fixed.schedule_decision import busy_rows_overlap, parse_time_minutes
 from fixed.session_scope import current_session_scope
 from fixed.week_agent_registry import ActiveWeekAgentResult, ActiveWeekAgentStreamEvent
 from student_parts.week05_load_kanas_past_conversations import extract_schedules_from_history
 from student_parts.week06_kanamate_decides_schedule import (
     agent_tool_names,
     decide_final_slot,
+    find_common_available_slots,
     find_common_available_slots_dict,
 )
+
+
+def _llm_candidate(day: str, start_time: str = "09:00", end_time: str = "10:00") -> dict[str, object]:
+    return {
+        "date": day,
+        "start_time": start_time,
+        "end_time": end_time,
+        "duration_minutes": 60,
+        "reason": "테스트 LLM payload 후보",
+    }
+
+
+def _assert_llm_slots_are_available(result: dict[str, object], expected_day: str | None = None) -> None:
+    assert result["slot_source"] == "llm"
+    slots = result["candidate_slots"]
+    assert isinstance(slots, list)
+    assert slots
+    for slot in slots:
+        assert isinstance(slot, dict)
+        if expected_day:
+            assert slot["date"] == expected_day
+        start_minutes = parse_time_minutes(slot["start_time"], -1)
+        end_minutes = parse_time_minutes(slot["end_time"], -1)
+        assert start_minutes >= 9 * 60
+        assert end_minutes <= 18 * 60
+        assert end_minutes - start_minutes >= 60
+        assert not busy_rows_overlap(result["busy_rows"], slot["date"], start_minutes, end_minutes)
 
 
 def test_week06_kana_tools_include_slot_decision_chain() -> None:
@@ -31,15 +60,19 @@ def test_week06_kana_tools_include_slot_decision_chain() -> None:
     } <= kana_tools
 
 
-def test_week06_final_slot_requires_explicit_agent_selection() -> None:
+def test_week06_slot_tools_expose_payload_contract_in_descriptions() -> None:
+    find_description = find_common_available_slots.description
+    decide_description = decide_final_slot.description
+
+    for term in ["busy_rows", "candidate_slots", "overlap", "겹치면 안", "검증"]:
+        assert term in find_description
+    for term in ["selected_index", "final_slot", "needs_agent_selection", "nested LLM", "candidate_slots"]:
+        assert term in decide_description
+
+
+def test_week06_final_slot_is_not_auto_selected_without_llm_selection() -> None:
     target_day = runtime_clock.next_weekday_iso(1)
-    slots = find_common_available_slots_dict(
-        member_names=["철수", "영희"],
-        date_from=target_day,
-        date_to=target_day,
-        duration_minutes=60,
-        limit=1,
-    )["candidate_slots"]
+    slots = [_llm_candidate(target_day)]
 
     result = json.loads(
         decide_final_slot.invoke(
@@ -52,31 +85,28 @@ def test_week06_final_slot_requires_explicit_agent_selection() -> None:
     assert result["final_slot"] is None
     assert result["needs_agent_selection"] is True
     assert result["candidates"][0] == f"{slots[0]['date']} {slots[0]['start_time']}-{slots[0]['end_time']}"
+    assert isinstance(result["reason"], str)
+    assert result["reason"].strip()
 
 
 def test_week06_selected_index_confirms_final_slot() -> None:
     target_day = runtime_clock.next_weekday_iso(1)
-    slots = find_common_available_slots_dict(
-        member_names=["철수", "영희"],
-        date_from=target_day,
-        date_to=target_day,
-        duration_minutes=60,
-        limit=1,
-    )["candidate_slots"]
+    slots = [_llm_candidate(target_day)]
 
     result = json.loads(
         decide_final_slot.invoke(
             {
                 "candidate_slots": slots,
                 "selected_index": 0,
-                "reason": "LLM이 첫 번째 후보를 선택함",
+                "needs_agent_selection": False,
             }
         )
     )
 
     assert result["final_slot"] == f"{slots[0]['date']} {slots[0]['start_time']}-{slots[0]['end_time']}"
     assert result["needs_agent_selection"] is False
-    assert result["reason"] == "LLM이 첫 번째 후보를 선택함"
+    assert isinstance(result["reason"], str)
+    assert result["reason"].strip()
 
 
 def test_week06_common_slots_accept_iso_datetime_date_bounds() -> None:
@@ -88,10 +118,13 @@ def test_week06_common_slots_accept_iso_datetime_date_bounds() -> None:
         date_to=f"{target_day}T10:00:00",
         duration_minutes=60,
         limit=3,
+        busy_rows=[],
+        candidate_slots=[_llm_candidate(target_day)],
+        llm_reason="ISO datetime 날짜 경계 테스트",
     )
 
     assert result["tool_name"] == "find_common_available_slots"
-    assert all(slot["date"] == target_day for slot in result["candidate_slots"])
+    _assert_llm_slots_are_available(result, expected_day=target_day)
     assert all(row["date"] == target_day for row in result["busy_rows"] if row["member_name"] != "나")
 
 
@@ -104,10 +137,47 @@ def test_week06_common_slots_keep_empty_external_members() -> None:
         date_to=target_day,
         duration_minutes=60,
         limit=1,
+        busy_rows=[],
+        candidate_slots=[_llm_candidate(target_day)],
+        llm_reason="외부 멤버 없음 테스트",
     )
 
     assert result["members"] == ["나"]
+    _assert_llm_slots_are_available(result, expected_day=target_day)
     assert all(row["member_name"] == "나" for row in result["busy_rows"])
+
+
+def test_week06_common_slots_filter_invalid_llm_payload() -> None:
+    target_day = runtime_clock.next_weekday_iso(1)
+    busy_rows = [
+        {
+            "member_name": "철수",
+            "title": "영업 미팅",
+            "date": target_day,
+            "start_time": "10:00",
+            "end_time": "11:00",
+            "notes": "겹침 검증용",
+        }
+    ]
+
+    result = find_common_available_slots_dict(
+        member_names=["철수"],
+        date_from=target_day,
+        date_to=target_day,
+        duration_minutes=60,
+        workday_start="09:00",
+        workday_end="18:00",
+        limit=5,
+        busy_rows=busy_rows,
+        candidate_slots=[
+            _llm_candidate(target_day, "09:00", "10:00"),
+            _llm_candidate(target_day, "10:30", "11:30"),
+            _llm_candidate(target_day, "18:00", "19:00"),
+        ],
+        llm_reason="검증 테스트",
+    )
+
+    assert result["candidate_slots"] == [_llm_candidate(target_day, "09:00", "10:00")]
 
 
 def test_runtime_passes_active_week_and_full_current_conversation(tmp_path, monkeypatch) -> None:

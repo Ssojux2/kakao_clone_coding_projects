@@ -1,13 +1,25 @@
 from __future__ import annotations
 
-"""Week 6 그룹 일정 조율에서 쓰는 시간 계산 함수 모음입니다.
+"""Week 6 그룹 일정 조율에서 쓰는 tool-description payload 함수 모음입니다.
 
-모든 시간 비교는 `HH:MM` 문자열을 자정 기준 분 단위 정수로 바꿔 수행합니다.
-이 모듈은 LangChain tool을 직접 알지 않고, 순수 payload 계산만 담당합니다.
+가능 시간 후보와 최종 선택은 LangChain tool description을 읽은 LLM agent가 직접 고릅니다.
+이 모듈은 LangChain tool을 직접 알지 않고, agent가 넘긴 payload를 검증하고 정규화합니다.
 """
 
 from datetime import date, timedelta
-from typing import Any, Callable
+from typing import Any
+
+from pydantic import BaseModel, Field, ValidationError
+
+
+class CommonSlotCandidate(BaseModel):
+    """LLM이 제안하는 공통 가능 시간 후보입니다."""
+
+    date: str = Field(description="YYYY-MM-DD 형식 날짜")
+    start_time: str = Field(description="HH:MM 24시간 형식 시작 시간")
+    end_time: str = Field(description="HH:MM 24시간 형식 종료 시간")
+    duration_minutes: int = Field(default=60, description="회의 길이(분)")
+    reason: str = Field(default="", description="이 시간이 적절하다고 판단한 짧은 근거")
 
 
 def parse_time_minutes(value: str | None, fallback: int) -> int:
@@ -69,6 +81,63 @@ def busy_rows_overlap(rows: list[dict[str, Any]], day: str, start_minutes: int, 
     return blockers
 
 
+def normalize_llm_candidate_slots(
+    *,
+    candidate_slots: list[Any] | None,
+    llm_reason: str | None = None,
+    date_from: str,
+    date_to: str,
+    busy_rows: list[dict[str, Any]],
+    duration_minutes: int,
+    workday_start: str,
+    workday_end: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """LLM 후보를 앱 payload에 맞게 정리하고 명백히 불가능한 후보만 제외합니다."""
+
+    valid_days = set(date_range(date_from, date_to))
+    work_start = parse_time_minutes(workday_start, 9 * 60)
+    work_end = parse_time_minutes(workday_end, 18 * 60)
+    requested_duration = max(30, int(duration_minutes or 60))
+
+    slots: list[dict[str, Any]] = []
+    for candidate in candidate_slots or []:
+        try:
+            if isinstance(candidate, CommonSlotCandidate):
+                slot = candidate.model_dump()
+            elif hasattr(candidate, "model_dump"):
+                slot = CommonSlotCandidate.model_validate(candidate.model_dump()).model_dump()
+            else:
+                slot = CommonSlotCandidate.model_validate(candidate).model_dump()
+        except (TypeError, ValidationError, ValueError):
+            continue
+
+        day = normalize_date_bound(slot.get("date", ""))
+        start_minutes = parse_time_minutes(slot.get("start_time"), -1)
+        end_minutes = parse_time_minutes(slot.get("end_time"), -1)
+        if day not in valid_days:
+            continue
+        if start_minutes < work_start or end_minutes > work_end or end_minutes <= start_minutes:
+            continue
+        if end_minutes - start_minutes < requested_duration:
+            continue
+        if busy_rows_overlap(busy_rows, day, start_minutes, end_minutes):
+            continue
+
+        slots.append(
+            {
+                "date": day,
+                "start_time": format_time_minutes(start_minutes),
+                "end_time": format_time_minutes(end_minutes),
+                "duration_minutes": end_minutes - start_minutes,
+                "reason": slot.get("reason") or llm_reason or "LLM이 tool description 계약에 따라 고른 공통 가능 시간입니다.",
+            }
+        )
+        if len(slots) >= limit:
+            break
+    return slots
+
+
 def slot_to_text(slot: Any) -> str:
     """후보 slot dict 또는 문자열을 사용자 답변용 시간 문자열로 바꿉니다."""
 
@@ -92,50 +161,31 @@ def find_common_available_slots_payload(
     workday_start: str = "09:00",
     workday_end: str = "18:00",
     limit: int = 5,
+    candidate_slots: list[Any] | None = None,
+    llm_reason: str | None = None,
 ) -> dict[str, Any]:
-    """busy row를 피해 공통 가능 시간 후보를 계산합니다.
+    """LLM이 tool 인자로 넘긴 공통 가능 시간 후보 payload를 검증해 기록합니다."""
 
-    업무시간 범위를 30분 단위로 훑으면서 `duration_minutes` 길이의 slot을 만들고,
-    누구의 busy row와도 겹치지 않는 후보만 `candidate_slots`에 담습니다.
-    """
-
-    start_minutes = parse_time_minutes(workday_start, 9 * 60)
-    end_minutes = parse_time_minutes(workday_end, 18 * 60)
-    duration = max(30, min(int(duration_minutes or 60), end_minutes - start_minutes))
-    step = 30
-
-    candidate_slots: list[dict[str, Any]] = []
-    for day in date_range(date_from, date_to):
-        cursor = start_minutes
-        while cursor + duration <= end_minutes:
-            slot_end = cursor + duration
-            blockers = busy_rows_overlap(busy_rows, day, cursor, slot_end)
-            if not blockers:
-                candidate_slots.append(
-                    {
-                        "date": day,
-                        "start_time": format_time_minutes(cursor),
-                        "end_time": format_time_minutes(slot_end),
-                        "duration_minutes": duration,
-                        "reason": "수집된 busy-time과 겹치지 않는 공통 가능 시간입니다.",
-                    }
-                )
-                if len(candidate_slots) >= limit:
-                    return {
-                        "ok": True,
-                        "tool_name": "find_common_available_slots",
-                        "members": member_names,
-                        "busy_rows": busy_rows,
-                        "candidate_slots": candidate_slots,
-                    }
-            cursor += step
-
+    normalized_candidate_slots = normalize_llm_candidate_slots(
+        candidate_slots=candidate_slots,
+        llm_reason=llm_reason,
+        date_from=date_from,
+        date_to=date_to,
+        busy_rows=busy_rows,
+        duration_minutes=duration_minutes,
+        workday_start=workday_start,
+        workday_end=workday_end,
+        limit=limit,
+    )
     return {
         "ok": True,
         "tool_name": "find_common_available_slots",
         "members": member_names,
         "busy_rows": busy_rows,
-        "candidate_slots": candidate_slots,
+        "candidate_slots": normalized_candidate_slots,
+        "slot_source": "llm",
+        "payload_source": "tool_description",
+        "llm_reason": llm_reason or "",
     }
 
 
@@ -148,28 +198,15 @@ def decide_final_slot_payload(
     date_from: str | None = None,
     date_to: str | None = None,
     duration_minutes: int = 60,
+    final_slot: str | None = None,
+    needs_agent_selection: bool | None = None,
     reason: str | None = None,
-    slot_finder: Callable[..., dict[str, Any]] | None = None,
+    busy_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """후보 slot 목록과 LLM agent가 명시한 최종 선택을 payload로 만듭니다.
-
-    후보가 없으면 `slot_finder`로 계산할 수 있지만, 최종 slot은 `selected_slot` 또는
-    `selected_index`가 명시됐을 때만 채웁니다. 반환 payload는 agent 답변과 테스트가 공통으로
-    쓰는 `final_slot`, `reason`, `candidates`, `needs_agent_selection`을 항상 포함합니다.
-    """
+    """LLM이 tool 인자로 넘긴 최종 회의 시간 결정을 payload로 기록합니다."""
 
     slots = list(candidate_slots or [])
-    computed: dict[str, Any] | None = None
-    if not slots and slot_finder and member_names and date_from and date_to:
-        computed = slot_finder(
-            member_names=member_names,
-            date_from=date_from,
-            date_to=date_to,
-            duration_minutes=duration_minutes,
-            limit=5,
-        )
-        slots = list(computed.get("candidate_slots") or [])
-
+    candidates = [slot_to_text(slot) for slot in slots]
     selected = selected_slot
     invalid_selection = False
     if selected is None and selected_index is not None:
@@ -183,35 +220,41 @@ def decide_final_slot_payload(
             else:
                 invalid_selection = True
 
-    candidates = [slot_to_text(slot) for slot in slots]
-    final_slot = slot_to_text(selected) if selected else None
+    resolved_final_slot = final_slot or (slot_to_text(selected) if selected is not None else None)
     if reason:
         final_reason = reason
     elif invalid_selection:
         final_reason = "선택한 후보 번호가 후보 목록 범위를 벗어났습니다."
     elif isinstance(selected, dict) and selected.get("reason"):
         final_reason = str(selected["reason"])
-    elif selected:
-        final_reason = "LLM agent가 후보 목록에서 명시적으로 선택한 시간입니다."
+    elif resolved_final_slot:
+        final_reason = "LLM이 tool description 계약에 따라 후보를 최종 시간으로 선택했습니다."
     elif candidates:
-        final_reason = "후보는 계산됐지만 LLM agent가 최종 후보를 아직 명시적으로 선택하지 않았습니다."
+        final_reason = "후보는 전달됐지만 final_slot 또는 selected_index가 없어 최종 확정하지 않았습니다."
     else:
         final_reason = "공통 가능 시간을 찾지 못했습니다."
 
+    if needs_agent_selection is None:
+        needs_agent_selection = resolved_final_slot is None
+
     payload: dict[str, Any] = {
-        "final_slot": final_slot,
+        "final_slot": resolved_final_slot,
         "reason": final_reason,
         "candidates": candidates,
-        "needs_agent_selection": bool(candidates and selected is None),
+        "needs_agent_selection": needs_agent_selection,
     }
     if selected_index is not None:
         payload["selected_index"] = selected_index
     if selected is not None:
         payload["selected_slot"] = selected
-    if computed:
-        payload["members"] = computed.get("members")
-        payload["busy_rows"] = computed.get("busy_rows", [])
-        payload["candidate_slots"] = computed.get("candidate_slots", [])
-    elif slots and any(isinstance(slot, dict) for slot in slots):
+    if member_names is not None:
+        payload["members"] = member_names
+    if date_from is not None:
+        payload["date_from"] = normalize_date_bound(date_from)
+    if date_to is not None:
+        payload["date_to"] = normalize_date_bound(date_to)
+    if busy_rows is not None:
+        payload["busy_rows"] = busy_rows
+    if slots and any(isinstance(slot, dict) for slot in slots):
         payload["candidate_slots"] = slots
     return payload

@@ -48,9 +48,18 @@ function setKananaTextareaValue(textarea, value) {
   }
 
   function hideKananaPendingPanel(panel) {
+    panel.dataset.kananaHiddenPending = "true";
     panel.hidden = true;
     panel.style.display = "none";
     panel.setAttribute("aria-hidden", "true");
+  }
+
+  function revealKananaMessagePanel(panel) {
+    if (panel.dataset.kananaHiddenPending !== "true") return;
+    panel.hidden = false;
+    panel.style.display = "";
+    panel.removeAttribute("aria-hidden");
+    delete panel.dataset.kananaHiddenPending;
   }
 
   window.cleanupKananaPendingMessages = function cleanupKananaPendingMessages() {
@@ -67,6 +76,7 @@ function setKananaTextareaValue(textarea, value) {
 
     messageGroups.forEach((group) => {
       const panels = Array.from(group.children).filter((child) => child.classList?.contains("message"));
+      panels.forEach(revealKananaMessagePanel);
       const pendingPanels = panels.filter(isKananaPendingMessage);
       const finalPanels = panels.filter((panel) => !isKananaPendingMessage(panel) && (panel.textContent || "").trim());
 
@@ -82,7 +92,7 @@ function setKananaTextareaValue(textarea, value) {
   function observeKananaPendingMessages() {
     if (!document.body) return;
     const observer = new MutationObserver(window.cleanupKananaPendingMessages);
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, { childList: true, characterData: true, subtree: true });
     window.cleanupKananaPendingMessages();
   }
 
@@ -214,6 +224,14 @@ def _replace_pending_with_answer(history: list[dict[str, Any]], answer: str) -> 
     return [*history, assistant_message]
 
 
+def _saved_chatbot_history(conversation_id: str) -> list[dict[str, str]]:
+    return [
+        message
+        for message in runtime.load_messages_for_chatbot(conversation_id)
+        if not _is_pending_assistant_message(message)
+    ]
+
+
 def _conversation_rows() -> list[dict[str, str]]:
     rows = runtime.app_store.list_conversations()
     return [
@@ -335,7 +353,7 @@ def load_chat(conversation_id: str | None) -> tuple:
     if not conversation_id:
         return (_chat_notice(), "", _saved_schedule_markdown(), *_conversation_button_updates(None))
     return (
-        runtime.load_messages_for_chatbot(conversation_id),
+        _saved_chatbot_history(conversation_id),
         conversation_id,
         _saved_schedule_markdown(),
         *_conversation_button_updates(conversation_id),

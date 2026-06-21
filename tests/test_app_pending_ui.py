@@ -172,3 +172,34 @@ def test_finish_agent_response_appends_answer_without_pending_placeholder(monkey
         {"role": "user", "content": "안녕"},
         {"role": "assistant", "content": "최종 답변"},
     ]
+
+
+def test_load_chat_filters_saved_pending_placeholders(monkeypatch) -> None:
+    fake_store = FakeStore()
+
+    class FakeRuntime:
+        app_store = fake_store
+
+        @staticmethod
+        def load_messages_for_chatbot(conversation_id: str) -> list[dict[str, str]]:
+            assert conversation_id == "c1"
+            return [
+                {"role": "user", "content": "안녕"},
+                {"role": "assistant", "content": "...\n\n<small>현재 sample_tool 실행 중</small>"},
+                {"role": "assistant", "content": "최종 답변"},
+            ]
+
+    monkeypatch.setattr(app, "runtime", FakeRuntime())
+
+    history = app.load_chat("c1")[0]
+
+    assert history == [
+        {"role": "user", "content": "안녕"},
+        {"role": "assistant", "content": "최종 답변"},
+    ]
+
+
+def test_pending_cleanup_script_reveals_reused_message_panels() -> None:
+    assert "kananaHiddenPending" in app.ENTER_TO_SEND_HEAD
+    assert "revealKananaMessagePanel" in app.ENTER_TO_SEND_HEAD
+    assert "characterData: true" in app.ENTER_TO_SEND_HEAD
