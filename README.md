@@ -15,6 +15,14 @@ cd kakao_clone_coding_projects
 ./run.sh --install
 ```
 
+Windows에서는 Git Bash 또는 WSL 터미널에서 아래처럼 실행합니다.
+
+```bash
+bash ./run.sh --install
+```
+
+`--install`은 macOS/Linux/Windows 환경에서 `uv`가 없으면 자동 설치를 시도하고, 프로젝트가 요구하는 Python 3.11 환경을 준비한 뒤 앱을 실행합니다.
+
 설치가 끝난 뒤에는 아래 명령만 실행하면 됩니다. `uv run`은 실행 전에 lockfile과 `.venv` 상태를 확인하고 필요한 패키지를 동기화합니다.
 
 ```bash
