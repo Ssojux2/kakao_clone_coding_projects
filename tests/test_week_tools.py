@@ -136,7 +136,7 @@ def test_week_tool_lists_accumulate_previous_weeks() -> None:
     week5 = _tool_names(week05_tools())
 
     assert week1 == {"personal_create_schedule", "personal_list_schedules", "personal_delete_schedule"}
-    assert week2 == set()
+    assert week2 == week1
     assert week1 <= week3
     assert "extract_schedule_request" in week3
     assert {"save_structured_request", "list_saved_requests", "get_saved_request", "personal_update_saved_schedule"} <= week3

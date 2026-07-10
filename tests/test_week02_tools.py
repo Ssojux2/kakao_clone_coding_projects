@@ -73,8 +73,13 @@ def test_week02_agent_uses_structured_response_format(monkeypatch) -> None:
     agent = week02_module.build_week02_agent()
 
     assert agent is fake_agent
-    assert captured["response_format"] is week02_module.StructuredRequest
-    assert captured["tools"] == []
+    assert captured["response_format"] is week02_module.StructuredRequestBatch
+    assert {getattr(item, "name", getattr(item, "__name__", str(item))) for item in captured["tools"]} == {
+        "personal_create_schedule",
+        "personal_list_schedules",
+        "personal_delete_schedule",
+    }
+    assert "StructuredRequestBatch structured_response" in captured["system_prompt"]
 
 
 def test_extract_schedule_request_uses_structured_model_without_nested_agent(monkeypatch) -> None:
