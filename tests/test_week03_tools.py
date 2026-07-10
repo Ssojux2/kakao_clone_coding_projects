@@ -255,3 +255,45 @@ def test_week03_personal_list_saved_schedules_hides_group_schedules_by_default(t
     assert default_listed["filters"]["kind"] == "personal_schedule"
     assert default_listed["schedules"] == []
     assert [row["title"] for row in group_listed["schedules"]] == ["공유 팀 회의"]
+
+
+def test_week03_personal_delete_saved_schedule_removes_single_row(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "app.sqlite3"
+    monkeypatch.setenv("KANANA_EXTERNAL_DB_PATH", str(tmp_path / "external.sqlite3"))
+    monkeypatch.setattr(week03_module, "CONFIG", replace(week03_module.CONFIG, app_db_path=db_path))
+    store = AppSQLiteStore(db_path)
+    store.save_structured_request(
+        {
+            "kind": "personal_schedule",
+            "title": "단건 삭제 대상 일정",
+            "date": "2026-07-24",
+            "start_time": "13:00",
+            "end_time": "14:00",
+            "members": ["나"],
+        }
+    )
+    target = store.list_schedules(limit=10)[0]
+
+    deleted = json.loads(
+        week03_module.personal_delete_saved_schedule.invoke({"schedule_id": target["schedule_id"]})
+    )
+
+    assert deleted["ok"] is True
+    assert deleted["tool_name"] == "personal_delete_saved_schedule"
+    assert deleted["schedule_id"] == target["schedule_id"]
+    assert deleted["deleted"]["title"] == "단건 삭제 대상 일정"
+    assert store.list_schedules(limit=10) == []
+
+
+def test_week03_personal_delete_saved_schedule_missing_id_returns_not_found(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "app.sqlite3"
+    monkeypatch.setattr(week03_module, "CONFIG", replace(week03_module.CONFIG, app_db_path=db_path))
+    AppSQLiteStore(db_path)
+
+    result = json.loads(
+        week03_module.personal_delete_saved_schedule.invoke({"schedule_id": "sch_does_not_exist"})
+    )
+
+    assert result["ok"] is False
+    assert result["deleted"] is None
+    assert result["schedule_id"] == "sch_does_not_exist"
