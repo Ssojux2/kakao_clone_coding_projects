@@ -40,10 +40,12 @@ _WEEK05_AGENT: Any | None = None
 #   wrapper tool을 만드는 주차입니다.
 #
 # 과제 구성
-#   - 메인과제: 외부 SQLite/MCP 서버의 이전 대화를 검색·로드하고, 그 대화에서 일정을 추출하는
-#     MCP wrapper 세로 슬라이스를 완성합니다.
-#   - 추가 과제: 공유 일정 저장소 CRUD wrapper와, 내 일정과 외부 멤버 busy-time을 한 rows로 합치는
-#     collect_member_schedules(Week 6 연결)까지 확장합니다.
+#   - 메인과제: 외부 SQLite/MCP 서버의 이전 대화를 검색·로드하고 그 대화에서 일정을 추출하는
+#     MCP wrapper 세로 슬라이스에 더해, 공유 일정 조회(list_shared_schedules)와
+#     내 일정·외부 멤버 busy-time을 한 rows로 합치는 collect_member_schedules까지 완성합니다.
+#     이 두 tool은 Week 6 Kana 하위 agent가 그대로 재사용하는 연결 지점이라 메인과제입니다.
+#   - 추가 과제: 공유 일정 저장소에 row를 직접 등록·삭제하는 create_shared_schedule/delete_shared_schedule
+#     wrapper를 확장합니다. 구현하지 않으려면 week05_tools() 목록에서 이 두 tool을 빼면 됩니다.
 #
 # 구현 위치와 사용할 코드
 #   - 이 파일(student_parts/week05_load_kanas_past_conversations.py)의 @tool wrapper 함수들을 구현합니다.
@@ -59,9 +61,11 @@ _WEEK05_AGENT: Any | None = None
 #     fixed/app_store.py의 AppSQLiteStore(CONFIG.app_db_path).list_schedules(...)와
 #     student_parts/week01_wake_up_nana.py의 PERSONAL_SCHEDULES 중 현재 대화 범위 row를 합칩니다.
 #   - Week 3+ AppSQLiteStore는 개인/그룹 일정을 저장할 때 공유 일정 저장소에 자동 동기화할 수 있습니다.
-#     이 파일의 create/list/delete_shared_schedule wrapper는 공유 저장소 row 자체를 직접 확인하거나 보정할 때 사용합니다.
+#     list_shared_schedules wrapper(메인)는 공유 저장소 row를 직접 확인할 때,
+#     create/delete_shared_schedule wrapper(추가)는 row를 직접 등록/삭제해 보정할 때 사용합니다.
 #   - week05_tools()는 student_parts/week04_retrieve_nanas_memory.py의 week04_tools() 위에
 #     Week 5 MCP wrapper tool들을 누적해 Week 5 단일 agent에 공개합니다.
+#     추가 과제(create/delete_shared_schedule)를 구현하지 않으려면 week05_tools() 목록에서 해당 tool을 빼면 됩니다.
 #
 # 메인과제 구현 대상
 #   1. search_previous_conversations
@@ -80,20 +84,25 @@ _WEEK05_AGENT: Any | None = None
 #      - 날짜 형식 정리는 외부 SQLite store/MCP 경계에서 한 번만 처리합니다.
 #      - 결과 rows는 member_name/title/date/start_time/end_time/notes 필드를 유지해야 합니다.
 #
-# 추가 과제 구현 대상
-#   1. create_shared_schedule / delete_shared_schedule / list_shared_schedules
-#      - 각각 call_mcp_tool_sync("create_shared_schedule" / "delete_shared_schedule" / "list_shared_schedules", args)를 호출합니다.
-#      - 공유 일정 저장소 row를 생성/삭제/조회할 때 MCP tool 결과를 그대로 전달합니다.
-#      - schedule_id 또는 source_conversation_id를 보존해야 나중에 수정/삭제 동기화가 가능합니다.
-#      - 공유 저장소 자체를 확인할 때는 list_shared_schedules로 "나"를 포함한 등록 row를 조회합니다.
-#      - 필터 없이 list_shared_schedules를 호출하면 외부 실습용 기본 공유 일정 row가 우선 반환될 수 있습니다.
+#   4. list_shared_schedules
+#      - call_mcp_tool_sync("list_shared_schedules", args)를 호출해 공유 일정 저장소 row를 조회합니다.
+#      - 공유 저장소 자체를 확인할 때는 "나"를 포함한 등록 row를 조회합니다.
+#      - 필터 없이 호출하면 외부 실습용 기본 공유 일정 row가 우선 반환될 수 있습니다.
+#      - Week 6 Kana 하위 agent가 공유 저장소 row 조회에 그대로 사용하는 tool입니다.
 #
-#   2. collect_member_schedules
+#   5. collect_member_schedules
 #      - 3주차 이후 저장된 내 일정은 앱 SQLite에서 읽고, 현재 대화의 임시 일정만 추가로 합칩니다.
 #      - 외부 멤버 일정은 call_mcp_tool_sync("extract_schedules_from_history", args) 결과를 이 tool 안에서 읽습니다.
 #      - 두 출처를 member_name/title/date/start_time/end_time/notes가 있는 rows 배열로 직접 합칩니다.
 #      - schedule_summary도 함께 반환해 LLM이 바쁜 시간을 자연어로 설명할 수 있게 합니다.
 #      - PERSONAL_SCHEDULES는 현재 대화 범위의 아직 DB에 없는 임시 일정만 합치고, SQLite에 이미 저장된 일정과 중복하지 않습니다.
+#      - Week 6 추가 과제(find_common_available_slots)가 이 tool의 rows를 busy_rows 근거로 사용합니다.
+#
+# 추가 과제 구현 대상 (구현하지 않으려면 week05_tools() 목록에서 해당 tool을 제거)
+#   1. create_shared_schedule / delete_shared_schedule
+#      - 각각 call_mcp_tool_sync("create_shared_schedule" / "delete_shared_schedule", args)를 호출합니다.
+#      - 공유 일정 저장소 row를 생성/삭제할 때 MCP tool 결과를 그대로 전달합니다.
+#      - schedule_id 또는 source_conversation_id를 보존해야 나중에 수정/삭제 동기화가 가능합니다.
 #
 # 책임 경계
 #   mcp_server/sqlite_mcp_server.py의 @mcp.tool 구현은 학생 구현 대상이 아닙니다.
@@ -105,14 +114,16 @@ _WEEK05_AGENT: Any | None = None
 #   - 메인과제: ./run.sh --week5에서 외부 팀원 일정 조회 요청을 입력하고, trace에서
 #     search_previous_conversations, load_conversation_messages, extract_schedules_from_history 중
 #     어떤 tool이 어떤 순서로 호출됐는지 확인합니다.
-#   - 추가 과제: collect_member_schedules 결과 rows에 "나"와 외부 멤버 일정이 같은 구조로 들어 있고,
+#     collect_member_schedules 결과 rows에 "나"와 외부 멤버 일정이 같은 구조로 들어 있고,
 #     list_shared_schedules 결과에 rows와 schedule_summary가 유지되는지 확인합니다.
+#   - 추가 과제: create_shared_schedule로 등록한 row가 list_shared_schedules 조회에 나타나고
+#     delete_shared_schedule로 삭제되는지 확인합니다.
 #
 # 함수별 동작 설명 ([메인]/[추가]/[공통]은 각 함수가 속한 과제 티어입니다)
-#   - [추가] _schedule_scope(schedule)
+#   - [메인] _schedule_scope(schedule)
 #     Week 1 임시 일정이 어느 대화 범위에 속하는지 읽습니다. session_id가 없으면 기본 scope로 처리합니다.
 #
-#   - [추가] _personal_schedules_for_current_scope()
+#   - [메인] _personal_schedules_for_current_scope()
 #     Week 3 이후 SQLite에 저장된 내 일정과 현재 대화에만 남아 있는 Week 1 임시 일정을 합칩니다.
 #     이미 SQLite에 저장된 일정과 임시 일정이 중복되지 않도록 schedule_id/id를 기준으로 한 번 걸러냅니다.
 #
@@ -122,17 +133,17 @@ _WEEK05_AGENT: Any | None = None
 #   - [메인] SearchPreviousConversationsInput / LoadConversationMessagesInput / ExtractSchedulesFromHistoryInput
 #     외부 이전 대화 검색, 대화 메시지 로드, 외부 대화에서 일정 추출 tool의 입력 스키마입니다.
 #
-#   - [추가] CreateSharedScheduleInput / DeleteSharedScheduleInput / ListSharedSchedulesInput
-#     외부 공유 일정 저장소에 row를 생성, 삭제, 조회할 때 쓰는 입력 스키마입니다.
+#   - [메인] ListSharedSchedulesInput / CollectMemberSchedulesInput
+#     공유 일정 저장소 row 조회와, 내 일정·외부 멤버 busy-time을 같은 rows 배열로 합치는 tool의 입력 스키마입니다.
 #
-#   - [추가] CollectMemberSchedulesInput
-#     내 일정과 외부 멤버 busy-time을 같은 rows 배열로 합치는 collect_member_schedules tool 입력 스키마입니다.
+#   - [추가] CreateSharedScheduleInput / DeleteSharedScheduleInput
+#     외부 공유 일정 저장소에 row를 생성, 삭제할 때 쓰는 입력 스키마입니다.
 #
-#   - [추가] _structured_request_from_schedule_row(row)
+#   - [메인] _structured_request_from_schedule_row(row)
 #     SQLite schedule row나 Week 1 임시 schedule row를 Week 2 StructuredRequest 모양으로 읽습니다.
 #     뒤에서 내 일정 row를 외부 멤버 row와 같은 구조로 맞출 때 사용합니다.
 #
-#   - [추가] _collect_member_schedules(...)
+#   - [메인] _collect_member_schedules(...)
 #     내 일정과 외부 멤버 일정을 같은 member_name/title/date/start_time/end_time/notes row 구조로 합칩니다.
 #     외부 멤버 이름과 날짜 범위는 fixed/external_people_store.py helper로 정규화합니다.
 #
@@ -145,12 +156,15 @@ _WEEK05_AGENT: Any | None = None
 #   - [메인] extract_schedules_from_history(...)
 #     외부 멤버의 이전 대화에서 일정 또는 바쁜 시간 row를 추출합니다.
 #
-#   - [추가] create_shared_schedule(...) / delete_shared_schedule(...) / list_shared_schedules(...)
-#     공유 일정 저장소를 조작하거나 조회하는 MCP wrapper입니다. source_conversation_id와 schedule_id를 보존해 동기화 근거로 씁니다.
+#   - [메인] list_shared_schedules(...)
+#     공유 일정 저장소 row를 조회하는 MCP wrapper입니다. Week 6 Kana 하위 agent도 그대로 사용합니다.
 #
-#   - [추가] collect_member_schedules(...)
+#   - [메인] collect_member_schedules(...)
 #     내 일정과 외부 멤버 busy-time을 한 번에 모으는 Week 5 핵심 tool입니다.
-#     Week 6의 공통 가능 시간 결정 tool이 이 rows를 busy_rows 근거로 사용합니다.
+#     Week 6의 공통 가능 시간 결정 tool(추가 과제)이 이 rows를 busy_rows 근거로 사용합니다.
+#
+#   - [추가] create_shared_schedule(...) / delete_shared_schedule(...)
+#     공유 일정 저장소에 row를 등록/삭제하는 MCP wrapper입니다. source_conversation_id와 schedule_id를 보존해 동기화 근거로 씁니다.
 #
 #   - [공통] week05_tools()
 #     Week 4까지의 tool에 외부 대화/MCP/공유 일정 tool을 누적합니다.
