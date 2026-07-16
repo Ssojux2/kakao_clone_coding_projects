@@ -46,6 +46,8 @@ GOLDEN_CASES = [
         "input": "철수 영희와 다음 주 회의 시간을 잡아줘",
         "expected_agent": "kana_agent",
         "expected_tool": "decide_final_slot",
+        # tier=extra: Week 6 추가 과제 tool이 등록된 뒤에만 검증하고, 미등록 상태에서는 skip 처리합니다.
+        "tier": "extra",
         "expected_tools": [
             "search_previous_conversations",
             "extract_schedules_from_history",

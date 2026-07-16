@@ -28,9 +28,10 @@ _WEEK02_AGENT: Any | None = None
 #
 # 과제 구성
 #   - 메인과제: Week 2 agent가 자연어 또는 Week 1 tool JSON을 StructuredRequestBatch로
-#     최종 반환하는 세로 슬라이스를 완성합니다.
-#   - 추가 과제: 메인과제에서 만든 StructuredRequest 스키마를 Week 3 이상 저장/조율 흐름에서
-#     재사용할 수 있도록 bridge 함수를 완성합니다.
+#     최종 반환하는 세로 슬라이스를 완성하고, StructuredRequest 스키마를 Week 3 이상
+#     저장/조율 흐름에서 재사용할 수 있도록 bridge 함수까지 완성합니다.
+#   - 추가 과제: 없습니다. bridge 함수(extract_structured_request/extract_schedule_request)는
+#     Week 3 이상 메인 저장 흐름의 선행 조건이므로 메인과제에 포함됩니다.
 #
 # 구현 위치와 사용할 코드
 #   - 이 파일(student_parts/week02_structure_natural_language_requests.py)의
@@ -67,19 +68,15 @@ _WEEK02_AGENT: Any | None = None
 #      - 개인 일정 생성 요청에서는 Week 1 personal_create_schedule tool 결과의 created_schedule JSON을
 #        LLM이 읽어 StructuredRequestBatch로 최종 변환하는 흐름을 확인합니다.
 #
-# 추가 과제 구현 대상
-#   1. _coerce_structured_request
-#      - LangChain structured output 결과가 이미 StructuredRequest이면 그대로 반환합니다.
-#      - dict이면 StructuredRequest.model_validate(...)로 검증해 반환합니다.
-#      - 예상한 형태가 아니면 RuntimeError를 발생시켜 잘못된 LLM 응답을 조용히 통과시키지 않습니다.
-#
-#   2. extract_structured_request
+#   4. extract_structured_request (Week 3 이상 연계 bridge)
 #      - chat_model().with_structured_output(StructuredRequest, method="function_calling")를 사용합니다.
 #      - system 메시지에는 join_system_prompt(week02_prompt_parts())를 넣고,
 #        user 메시지에는 text를 넣어 structured LLM을 호출합니다.
 #      - 자연어 또는 JSON 문자열을 StructuredRequest 하나로 검증/구조화합니다.
+#      - 결과가 이미 StructuredRequest이면 그대로, dict이면 StructuredRequest.model_validate(...)로
+#        검증해 반환하고, 예상한 형태가 아니면 오류를 내 잘못된 LLM 응답을 조용히 통과시키지 않습니다.
 #
-#   3. extract_schedule_request
+#   5. extract_schedule_request (Week 3 이상 연계 bridge)
 #      - extract_structured_request(query) 결과에 ok/tool_name/base_date를 붙입니다.
 #      - structured_request에는 model_dump() 결과를 넣고, json.dumps(..., ensure_ascii=False)로 반환합니다.
 #      - Week 3 이상 저장 tool이 structured_request 필드를 그대로 받을 수 있게 만듭니다.
@@ -110,10 +107,10 @@ _WEEK02_AGENT: Any | None = None
 #      structured LLM 호출로 구조화한 뒤 JSON tool payload로 감쌉니다.
 #
 # 검증 방법
-#   - 메인과제: ./run.sh --week2로 실행한 뒤 "다음 주 화요일 오후 3시에 철수랑 회의 잡아줘" 같은
+#   - 세로 슬라이스: ./run.sh --week2로 실행한 뒤 "다음 주 화요일 오후 3시에 철수랑 회의 잡아줘" 같은
 #     문장을 입력합니다. 최종 답변이 StructuredRequestBatch class 형식의 structured_response로
 #     나오는지 확인합니다.
-#   - 추가 과제: Week 3을 실행한 뒤 trace에서 extract_schedule_request 이후
+#   - bridge (Week 3 연계): Week 3을 실행한 뒤 trace에서 extract_schedule_request 이후
 #     save_structured_request가 호출되는지 봅니다. extract_schedule_request의 반환 JSON에
 #     ok/tool_name/base_date/structured_request가 들어 있는지 확인합니다.
 #

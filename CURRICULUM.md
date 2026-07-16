@@ -78,7 +78,7 @@
 
 학습 목표는 multi-agent routing을 역할 분리로 이해하는 것입니다. `nana_agent`는 개인 일정, 저장, 개인 RAG 흐름을 담당하고, `kana_agent`는 여러 사람의 일정 조율을 담당합니다.
 
-`week06_prompt_parts`는 Week 1-5 prompt를 그대로 이어받고 Week 6 supervisor 판단 기준을 추가합니다. `supervisor_system_prompt`는 이 누적 prompt를 사용하고, `nana_system_prompt`와 `kana_system_prompt`는 supervisor prompt를 공유하지 않는 하위 에이전트 전용 prompt를 따로 사용합니다. `nana_tools`는 Week 4까지의 개인 도구를 공개하고, `kana_tools`는 `extract_schedule_request`, 외부 대화 검색, 멤버 일정 수집, `find_common_available_slots`, `decide_final_slot`을 공개합니다. `supervisor_tools`는 `nana_agent`, `kana_agent` 위임 도구만 노출합니다.
+`week06_prompt_parts`는 Week 1-5 prompt를 그대로 이어받고 Week 6 supervisor 판단 기준을 추가합니다. `supervisor_system_prompt`는 이 누적 prompt를 사용하고, `nana_system_prompt`와 `kana_system_prompt`는 supervisor prompt를 공유하지 않는 하위 에이전트 전용 prompt를 따로 사용합니다. `nana_tools`는 Week 4까지의 개인 도구를 공개하고, `kana_tools`는 `extract_schedule_request`, 외부 대화 검색, 공유 일정 조회(`list_shared_schedules`), 멤버 일정 수집(`collect_member_schedules`)에 더해 추가 과제인 `find_common_available_slots`, `decide_final_slot`을 함께 담습니다. 추가 과제를 구현하지 않는 수강생은 `kana_tools`에서 뒤 두 tool을 빼면 되고, 그러면 Kana는 멤버별 바쁜 시간 정리까지만 답합니다. `supervisor_tools`는 `nana_agent`, `kana_agent` 위임 도구만 노출합니다.
 
 `kana_agent`는 외부 대화와 멤버 일정을 확인한 뒤 `find_common_available_slots`에서 LLM structured output으로 후보를 판단하고, 선택한 후보를 `decide_final_slot`에 명시해 최종 `final_slot`, `reason`, `candidates` payload를 반환합니다.
 

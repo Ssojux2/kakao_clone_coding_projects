@@ -17,7 +17,7 @@
 
 ![Kanana Schedule Agent 전체 실행 흐름](static/project_overview_flow.svg)
 
-메인 채팅 화면의 런타임은 UI 입력과 대화 저장만 담당합니다. `run.sh --weekN` 또는 `KANANA_ACTIVE_WEEK`로 선택된 주차의 `student_parts` agent가 사용자 프롬프트를 읽고 자기 prompt와 tool 목록을 기준으로 structured output, 일정 CRUD, SQLite 저장/조회, RAG 검색, MCP 검색, 그룹 일정 제안을 수행합니다. Week 1-5는 단일 agent가 해당 주차까지 누적된 tool을 사용하고, Week 6은 supervisor가 `nana_agent` 또는 `kana_agent` tool로 위임합니다. 코드가 의미 판단을 선점하지 않고, 저장소와 MCP는 LLM이 고른 tool 호출을 실행하는 얇은 실행 계층으로 둡니다. `run_golden.py`는 API key 없이도 하네스 프롬프트가 agent prompt와 tool wiring에 연결되어 있는지 검증합니다.
+메인 채팅 화면의 런타임은 UI 입력과 대화 저장만 담당합니다. `run.sh --weekN` 또는 `KANANA_ACTIVE_WEEK`로 선택된 주차의 `student_parts` agent가 사용자 프롬프트를 읽고 자기 prompt와 tool 목록을 기준으로 structured output, 일정 CRUD, SQLite 저장/조회, RAG 검색, MCP 검색, 그룹 일정 제안을 수행합니다. Week 3~6은 메인 과제 tool만으로 앱이 끝까지 동작하며, 추가 과제 tool도 같은 `weekNN_tools()`(Week 6은 `kana_tools()`) 목록에 함께 두고 구현하지 않을 경우 목록에서 빼는 방식으로 처리합니다. Week 1-5는 단일 agent가 해당 주차까지 누적된 tool을 사용하고, Week 6은 supervisor가 `nana_agent` 또는 `kana_agent` tool로 위임합니다. 코드가 의미 판단을 선점하지 않고, 저장소와 MCP는 LLM이 고른 tool 호출을 실행하는 얇은 실행 계층으로 둡니다. `run_golden.py`는 API key 없이도 하네스 프롬프트가 agent prompt와 tool wiring에 연결되어 있는지 검증합니다.
 
 ## 폴더 지도
 
@@ -45,9 +45,9 @@
 | --- | --- | --- | --- |
 | Week 1 | `student_parts/week01_wake_up_nana.py` | LangChain tool 기초 | 상단 가이드가 지정한 3개 개인 일정 tool을 구현하고, `week01_tools()`가 이를 공개합니다. |
 | Week 2 | `student_parts/week02_structure_natural_language_requests.py` | Structured output | `week02_tools()`가 Week 1 도구에 structured output tool을 누적하고 Week 2 agent가 이를 선택합니다. |
-| Week 3 | `student_parts/week03_build_nanas_logbook.py` | SQLite persistence | `week03_tools()`가 Week 1-2 도구에 SQLite 저장/조회/삭제 tool을 누적합니다. |
-| Week 4 | `student_parts/week04_retrieve_nanas_memory.py` | Agentic RAG | `week04_tools()`가 Week 1-3 도구에 course repo 기준 RAG 검색 tool인 `search_personal_references`, `search_saved_requests`를 누적합니다. |
-| Week 5 | `student_parts/week05_load_kanas_past_conversations.py`, `mcp_server/sqlite_mcp_server.py` | MCP tool 연결 | `week05_tools()`가 Week 1-4 도구에 외부 대화/일정 추출 tool을 누적합니다. |
+| Week 3 | `student_parts/week03_build_nanas_logbook.py` | SQLite persistence | `week03_tools()`가 Week 1-2 도구에 SQLite 저장/조회 메인 tool을 누적합니다. 수정/삭제는 추가 과제이며 구현하지 않으면 목록에서 뺍니다. |
+| Week 4 | `student_parts/week04_retrieve_nanas_memory.py` | Agentic RAG | `week04_tools()`가 Week 1-3 도구에 메인 RAG 검색 tool `search_personal_references`, `search_saved_requests`를 누적합니다. 대화 RAG(`search_conversation_messages`)는 추가 과제입니다. |
+| Week 5 | `student_parts/week05_load_kanas_past_conversations.py`, `mcp_server/sqlite_mcp_server.py` | MCP tool 연결 | `week05_tools()`가 Week 1-4 도구에 외부 대화/일정 추출과 공유 일정 조회·멤버 일정 수집 메인 tool을 누적합니다. 공유 저장소 등록/삭제는 추가 과제입니다. |
 | Week 6 | `student_parts/week06_kanamate_decides_schedule.py` | Supervisor / sub-agent | `build_week_agent()`가 supervisor를 실행하고, `nana_agent`, `kana_agent`가 이전 주차 tool 목록을 역할별로 조립합니다. |
 
 주차가 올라갈수록 앞 주차의 결과를 재사용합니다. Week 1은 단독 구현이고, Week 2는 Week 1 도구를 포함하며, Week 3은 Week 1-2 도구를 포함하는 식으로 누적됩니다. 최종 Week 6의 `kana_agent`는 Week 5의 외부 일정 검색 결과를 사용하고, `nana_agent`는 Week 1/3/4의 개인 일정 생성, 저장, 검색 흐름을 사용합니다.

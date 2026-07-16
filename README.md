@@ -81,25 +81,26 @@ conda 환경이 필요한 경우에는 기존 `environment.yml` 기반 runner를
   - `build_week02_agent()`는 tool 없이 `response_format=StructuredRequest`로 대화 결과를 바로 구조화합니다.
   - `extract_schedule_request`는 Week 3 이후 DB 저장 tool chain에서 재사용하는 helper입니다.
 - Week 3: `student_parts/week03_build_nanas_logbook.py`
-  - `save_structured_request`, `list_saved_requests`, `get_saved_request`
-  - `personal_list_saved_schedules`, `personal_update_saved_schedule`, `personal_delete_saved_schedules`
+  - 메인: `save_structured_request`, `list_saved_requests`, `get_saved_request`, `personal_list_saved_schedules`
+  - 추가: `personal_update_saved_schedule`, `personal_delete_saved_schedules`, `personal_create_schedule`(Week 1 호환)
   - LLM이 저장/조회 의도를 판단하고 SQLite tool로 structured output을 저장/조회
-  - `week03_tools()`는 Week 1 도구, Week 2 구조화 helper, SQLite 저장/조회/삭제 도구를 함께 노출합니다.
+  - `week03_tools()`가 메인·추가 tool을 함께 노출합니다. 추가 과제를 구현하지 않으면 해당 tool을 목록에서 빼도 메인 tool만으로 동작합니다.
 - Week 4: `student_parts/week04_retrieve_nanas_memory.py`
-  - `add_personal_reference`, `search_personal_references`, `search_saved_requests`
-  - LLM이 ChromaDB 개인 참고자료와 SQLite structured data 검색 tool을 조합
+  - 메인: `add_personal_reference`, `search_personal_references`, `search_saved_requests`
+  - 추가: `search_conversation_messages`(앱 채팅 발화 agentic RAG)
   - 개인 참고자료 add/search는 `PersonalReferenceStore`의 ChromaDB collection과 embedding proxy adapter를 기준으로 동작합니다.
-  - course repo 기준 RAG tool은 `search_personal_references`와 `search_saved_requests`이며, 각각 top-level `hits`, `rows` payload를 반환합니다.
-  - 기존 통합 검색 `search_nana_memory`는 compatibility helper로 남겨 두며 `reference_backend`와 context를 함께 확인할 수 있습니다.
-  - `week04_tools()`는 Week 1-3 도구에 RAG 도구를 누적합니다.
+  - course repo 기준 메인 RAG tool은 `search_personal_references`와 `search_saved_requests`이며, 각각 top-level `hits`, `rows` payload를 반환합니다.
+  - 기존 통합 검색 `search_nana_memory`는 compatibility helper로 남겨 둡니다.
+  - `week04_tools()`가 Week 1-3 도구에 RAG 도구를 누적하며, 추가 과제 `search_conversation_messages`를 구현하지 않으면 목록에서 빼도 됩니다.
 - Week 5: `student_parts/week05_load_kanas_past_conversations.py`, `mcp_server/sqlite_mcp_server.py`
-  - `search_previous_conversations`, `load_conversation_messages`, `extract_schedules_from_history`
-  - `create_shared_schedule`, `delete_shared_schedule`, `list_shared_schedules`, `collect_member_schedules`
+  - 메인: `search_previous_conversations`, `load_conversation_messages`, `extract_schedules_from_history`, `list_shared_schedules`, `collect_member_schedules`
+  - 추가: `create_shared_schedule`, `delete_shared_schedule`
   - LLM이 MCP SQLite 이전 대화 검색, 메시지 로드, 일정 추출 tool을 조합
   - `mcp_server/sqlite_mcp_server.py`의 MCP tool 구현은 학생 구현 대상이 아니라 기준 구현/참고 코드로 유지합니다.
-  - `week05_tools()`는 Week 1-4 도구에 외부 SQLite/MCP 일정 도구를 누적합니다.
+  - `week05_tools()`가 Week 1-4 도구에 외부 SQLite/MCP 일정 도구를 누적하며, 추가 과제 `create_shared_schedule`/`delete_shared_schedule`을 구현하지 않으면 목록에서 빼도 됩니다. `list_shared_schedules`/`collect_member_schedules`는 Week 6이 재사용하므로 메인입니다.
 - Week 6: `student_parts/week06_kanamate_decides_schedule.py`
-  - `decide_final_slot`, `nana_agent`, `kana_agent`
+  - 메인: `nana_agent`, `kana_agent`(supervisor 위임 뼈대)
+  - 추가: `find_common_available_slots`, `decide_final_slot`(그룹 공통 시간 확정). 구현하지 않으면 `kana_tools()` 목록에서 빼면 되고, Kana는 멤버별 바쁜 시간 정리까지 동작
   - prompt-driven supervisor, `nana_agent`, `kana_agent`, tool 기반 sub-agent
   - `week06_prompt_parts()`는 Week 1-5 prompt를 누적한 supervisor system prompt 조각이며, sub-agent는 `nana_system_prompt()`와 `kana_system_prompt()`에서 전용 prompt를 받습니다.
   - Week 6 파일은 이전 주차 구현을 다시 작성하지 않고 Week 1-5 도구를 import해 sub-agent tool 목록을 조립합니다.
