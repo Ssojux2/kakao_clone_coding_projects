@@ -76,7 +76,7 @@ _WEEK05_AGENT: Any | None = None
 #   2. load_conversation_messages
 #      - conversation_id로 외부 SQLite/MCP helper에서 이전 대화 메시지를 조회합니다.
 #      - call_external_tool_payload("load_conversation_messages", {"conversation_id": conversation_id})를 사용합니다.
-#      - 대화 메시지의 speaker/content/created_at 순서가 보존되도록 결과를 가공하지 않습니다.
+#      - 대화 메시지의 sender/content/created_at 순서가 보존되도록 결과를 가공하지 않습니다.
 #
 #   3. extract_schedules_from_history
 #      - member_names, date_from, date_to를 받습니다.
@@ -151,7 +151,7 @@ _WEEK05_AGENT: Any | None = None
 #     외부 SQLite/MCP 서버에 저장된 과거 대화를 검색합니다. wrapper는 query/member_names/limit를 넘기고 결과 문자열을 그대로 반환합니다.
 #
 #   - [메인] load_conversation_messages(conversation_id)
-#     검색으로 찾은 특정 외부 대화의 전체 메시지를 불러옵니다. speaker/content/created_at 순서를 보존합니다.
+#     검색으로 찾은 특정 외부 대화의 전체 메시지를 불러옵니다. sender/content/created_at 순서를 보존합니다.
 #
 #   - [메인] extract_schedules_from_history(...)
 #     외부 멤버의 이전 대화에서 일정 또는 바쁜 시간 row를 추출합니다.
