@@ -45,6 +45,7 @@ _SUPERVISOR_AGENT: Any | None = None
 # 과제 구성
 #   - 메인과제: 한 agent가 모두 처리하던 구조를 supervisor + Nana/Kana 하위 agent로 나누어
 #     supervisor가 요청을 알맞은 하위 agent에 위임하는 뼈대를 완성합니다.
+#     세 agent의 system prompt를 직접 작성하는 것과 위임 wrapper tool 두 개 구현이 여기 들어갑니다.
 #   - 추가 과제: Kana의 공통 가능 시간 후보 검증(find_common_available_slots)과
 #     최종 시간 결정(decide_final_slot)까지 붙여 그룹 일정 조율을 마무리합니다.
 #
@@ -61,20 +62,28 @@ _SUPERVISOR_AGENT: Any | None = None
 #   - trace 정리는 fixed/langchain_trace.py의 extract_agent_events(), extract_final_text()를 사용합니다.
 #
 # 메인과제 구현 대상
-#   1. nana_agent
+#   1. week06_prompt_parts / nana_prompt_parts / kana_prompt_parts / supervisor_system_prompt
+#      - supervisor와 Nana/Kana 하위 에이전트의 역할 분담을 prompt로 직접 정의합니다.
+#      - supervisor는 직접 업무를 처리하지 않고 nana_agent 또는 kana_agent로만 위임하게 씁니다.
+#      - Nana는 개인 일정/저장/RAG, Kana는 외부 멤버 일정/공통 시간 결정을 담당하게 씁니다.
+#      - week06_prompt_parts는 week05_prompt_parts()를, nana_prompt_parts는 week04_prompt_parts()를 누적합니다.
+#        kana_prompt_parts만 누적 없이 시작하므로 Kana 역할을 처음부터 작성해야 합니다.
+#      - 하위 에이전트는 supervisor prompt를 공유하지 않으므로 각자 필요한 지시를 스스로 갖고 있어야 합니다.
+#
+#   2. nana_agent
 #      - supervisor가 넘긴 query로 Nana 하위 agent를 이 tool 안에서 만들거나 재사용해 실행합니다.
 #      - 개인 일정 조회/생성/수정/삭제 판단은 하위 agent가 prompt와 tool description을 근거로 수행합니다.
 #      - 하위 agent 결과에서 answer, trace, inner_tool_names를 뽑아 JSON 문자열로 반환합니다.
 #      - 개인 일정 생성/조회/수정/삭제, todo/reminder 저장, 개인 참고자료와 앱 대화 RAG는 Nana 담당입니다.
 #
-#   2. kana_agent
+#   3. kana_agent
 #      - supervisor가 넘긴 query로 Kana 하위 agent를 이 tool 안에서 만들거나 재사용해 실행합니다.
 #      - 하위 trace를 훑어 decide_final_slot 결과를 final_slot_payload로 끌어올립니다.
 #      - answer, trace, inner_tool_names, final_slot_payload, final_decision_payload를 JSON으로 반환합니다.
 #      - 외부 멤버 일정 조회, 공유 일정 row 조회, 공통 가능 시간 후보 검증과 최종 시간 결정은 Kana 담당입니다.
 #
-# 추가 과제 구현 대상
-#   1. find_common_available_slots / decide_final_slot
+# 추가 과제 구현 대상 (구현하지 않으려면 kana_tools() 목록에서 해당 tool을 제거)
+#   1. find_common_available_slots_dict / find_common_available_slots / decide_final_slot
 #      - find_common_available_slots는 busy-time row를 Python 룰이나 nested LLM으로 훑지 않고,
 #        Kana agent가 tool description을 읽고 직접 고른 candidate_slots payload를 검증/기록합니다.
 #      - date_from/date_to에 ISO datetime이 들어오면 normalize_date_bound()로 날짜 부분만 사용합니다.
@@ -88,30 +97,36 @@ _SUPERVISOR_AGENT: Any | None = None
 # 중요한 구조
 #   Week 6 파일은 Week 1-5 구현을 다시 작성하지 않습니다.
 #   이전 주차 tool을 import하고 kana_tools(), supervisor_tools()에서 역할별로 조립합니다.
-#   prompt 함수는 구현 대상이 아니라 agent 역할과 데이터 흐름을 이해하는 참고 코드입니다.
+#   prompt 함수는 메인과제 구현 대상입니다. supervisor와 Nana/Kana는 서로 다른 system prompt로 동작하므로,
+#   위임 규칙과 역할 분담을 어떻게 쓰느냐가 Week 6 동작을 그대로 좌우합니다.
+#   두 tool description 상수는 구현 대상이 아니라 완성된 상태로 제공됩니다. 추가 과제는 여기 적힌 계약을 지키면 됩니다.
 #   find_common_available_slots/decide_final_slot의 실제 겹침 검증과 payload 정리는 fixed/schedule_decision.py가 맡습니다.
 #
 # Compatibility helper
-#   propose_group_schedule은 기존 흐름을 위해 유지합니다.
-#   현재 supervisor/kana_tools() 경로의 핵심 구현 대상은 find_common_available_slots,
-#   decide_final_slot, nana_agent, kana_agent입니다.
+#   propose_group_schedule은 기존 흐름을 위해 구현된 상태로 유지하며 kana_tools()에는 들어가지 않습니다.
+#   현재 supervisor/kana_tools() 경로의 구현 대상은 prompt 함수 4개와 nana_agent, kana_agent(메인),
+#   find_common_available_slots_dict, find_common_available_slots, decide_final_slot(추가)입니다.
 #
 # 검증 방법
-#   - 메인과제: ./run.sh --week6 또는 ./run.sh --golden을 실행하고, supervisor trace에서
-#     nana_agent 또는 kana_agent 중 무엇이 선택됐는지, 개인 일정 조회에서 Nana 하위 agent trace에
-#     personal_list_saved_schedules 호출이 남는지 확인합니다.
-#   - 추가 과제: 그룹 일정 요청에서 하위 trace에 search_previous_conversations, extract_schedules_from_history,
+#   - 메인과제: ./run.sh --week6을 실행하고, supervisor trace에서 nana_agent 또는 kana_agent 중
+#     무엇이 선택됐는지, 개인 일정 조회에서 Nana 하위 agent trace에 personal_list_saved_schedules
+#     호출이 남는지 확인합니다. 위임이 엉뚱한 agent로 가면 tool 구현이 아니라 prompt의 판단 기준을 먼저 고칩니다.
+#     추가 과제를 아직 구현하지 않았다면 kana_tools()에서 find_common_available_slots와
+#     decide_final_slot을 빼고 Kana prompt에서도 두 tool 언급을 지운 뒤 위임 흐름만 확인합니다.
+#   - 추가 과제: 그룹 일정 요청에서 하위 trace에 search_previous_conversations,
+#     extract_schedules_from_history 또는 collect_member_schedules, find_common_available_slots,
 #     decide_final_slot이 이어지고 final_slot_payload가 최종 답변과 일치하는지 확인합니다.
 #
 # 함수별 동작 설명 ([메인]/[추가]/[공통]은 각 함수가 속한 과제 티어입니다)
-#   - [공통] week06_system_prompt() / week06_prompt_parts()
+#   - [메인] week06_system_prompt() / week06_prompt_parts()
 #     supervisor agent의 system prompt를 만듭니다. supervisor는 직접 업무를 처리하지 않고 nana_agent 또는 kana_agent로 위임합니다.
 #
-#   - [공통] nana_prompt_parts() / kana_prompt_parts()
+#   - [메인] nana_prompt_parts() / kana_prompt_parts()
 #     하위 에이전트별 역할 prompt를 만듭니다. Nana는 개인 일정/저장/RAG, Kana는 외부 멤버 일정/공통 시간 결정을 담당합니다.
 #
-#   - [공통] nana_system_prompt() / kana_system_prompt() / supervisor_system_prompt()
+#   - [메인] nana_system_prompt() / kana_system_prompt() / supervisor_system_prompt()
 #     prompt 조각을 join_system_prompt(...)로 합쳐 실제 create_agent(...)에 넘길 system prompt 문자열을 만듭니다.
+#     supervisor_system_prompt()는 누적 조각 뒤에 supervisor 실행 역할 지시를 덧붙이는 자리입니다.
 #
 #   - [공통] _tool_call_names(events)
 #     trace event 목록에서 tool_call 이벤트의 tool_name만 뽑아 UI와 테스트가 호출 순서를 쉽게 확인하게 합니다.
@@ -122,11 +137,15 @@ _SUPERVISOR_AGENT: Any | None = None
 #   - [공통] tool_name(tool_object)
 #     LangChain tool 객체와 일반 함수 객체에서 이름을 안전하게 읽습니다. agent_tool_names(...)에서 사용합니다.
 #
+#   - [공통] FIND_COMMON_AVAILABLE_SLOTS_DESCRIPTION / DECIDE_FINAL_SLOT_DESCRIPTION
+#     Kana agent가 두 tool을 언제 어떤 argument로 호출할지 판단하는 근거가 되는 tool description입니다.
+#     구현 대상이 아니라 완성된 상태로 제공되므로, 추가 과제는 여기 적힌 계약을 그대로 지키도록 구현하면 됩니다.
+#
 #   - [추가] FindCommonAvailableSlotsInput / DecideFinalSlotInput
 #     Kana agent가 공통 가능 시간 후보와 최종 선택을 tool argument로 넘길 때 쓰는 Pydantic 입력 스키마입니다.
 #
-#   - [메인/추가] ProposeGroupScheduleInput / AgentQueryInput
-#     기존 호환용 그룹 일정 제안 tool(추가)과 supervisor가 하위 agent에 query를 넘기는 wrapper tool(메인)의 입력 스키마입니다.
+#   - [공통] ProposeGroupScheduleInput / AgentQueryInput
+#     호환용 그룹 일정 제안 tool(구현 완료)과 supervisor가 하위 agent에 query를 넘기는 wrapper tool(메인과제)의 입력 스키마입니다.
 #
 #   - [추가] find_common_available_slots_dict(...)
 #     멤버 이름과 날짜 범위를 정규화하고, busy_rows가 없으면 collect_member_schedules를 호출해 수집합니다.
@@ -141,8 +160,9 @@ _SUPERVISOR_AGENT: Any | None = None
 #   - [공통] kana_tools() / supervisor_tools() / agent_tool_names(agent_name)
 #     Kana 하위 agent와 supervisor가 볼 수 있는 tool 목록을 역할별로 조립하고 이름 목록을 제공합니다.
 #
-#   - [추가] propose_group_schedule(...)
-#     이전 실습 흐름과의 호환을 위해 남겨 둔 그룹 일정 최종 제안 helper입니다. 현재 핵심 경로는 decide_final_slot입니다.
+#   - [공통] propose_group_schedule(...)
+#     이전 실습 흐름과의 호환을 위해 남겨 둔 그룹 일정 최종 제안 helper입니다. 구현 완료 상태이고
+#     kana_tools()에도 들어가지 않습니다. 현재 핵심 경로는 decide_final_slot입니다.
 #
 #   - [메인] nana_agent(query)
 #     supervisor가 개인 업무를 위임할 때 호출하는 tool입니다. Week 4 tool을 가진 Nana 하위 agent를 실행합니다.
