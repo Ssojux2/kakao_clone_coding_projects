@@ -116,6 +116,48 @@ def test_conversation_rag_store_reembeds_only_the_last_window_on_append(tmp_path
     assert append_sync == {"upserted": 1, "skipped": 2, "deleted": 0, "total": 3}
 
 
+def test_conversation_rag_store_embeds_conversation_title(tmp_path) -> None:
+    """제목으로만 대화를 찾을 수 있도록 제목이 embedding 본문에 들어가야 합니다."""
+
+    sqlite_store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    rag_store = conversation_rag_store(tmp_path)
+    conversation_id = sqlite_store.create_conversation("제주도 여행 계획")["conversation_id"]
+    # 본문에는 제목 단어가 전혀 없습니다.
+    sqlite_store.append_message(conversation_id, "user", "숙소는 바닷가 근처로 잡자.")
+    rag_store.sync_from_sqlite(sqlite_store)
+
+    documents = rag_store.collection.get(include=["documents"]).get("documents", [])
+
+    assert documents
+    assert all("제주도 여행 계획" in document for document in documents)
+
+
+def test_conversation_rag_store_reembeds_after_title_change(tmp_path) -> None:
+    """제목이 embedding 본문이므로 제목이 바뀌면 다시 embedding해야 합니다.
+
+    제목은 메시지를 붙일 때 바뀌지 않으므로, 이 동작이 append 비용을 늘리지는 않습니다.
+    """
+
+    sqlite_store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    rag_store = conversation_rag_store(tmp_path)
+    conversation_id = sqlite_store.create_conversation("원래 제목")["conversation_id"]
+    sqlite_store.append_message(conversation_id, "user", "제목과 상관없는 본문입니다.")
+    rag_store.sync_from_sqlite(sqlite_store)
+
+    # 앱에는 별도 rename API가 없고 첫 메시지에서 제목이 채워지므로 직접 갱신합니다.
+    with sqlite_store.connect() as conn:
+        conn.execute(
+            "UPDATE conversations SET title = ? WHERE conversation_id = ?",
+            ("새로 바꾼 제목", conversation_id),
+        )
+    rename_sync = rag_store.sync_from_sqlite(sqlite_store)
+    hits = rag_store.search(query="새로 바꾼 제목", top_k=3)
+
+    assert rename_sync["upserted"] == 1
+    assert "새로 바꾼 제목" in hits[0]["content"]
+    assert "원래 제목" not in hits[0]["content"]
+
+
 def test_conversation_rag_store_archive_refreshes_metadata_without_reembedding(tmp_path) -> None:
     """보관 상태 변경은 metadata만 갱신하고 다시 embedding하지 않아야 합니다."""
 
@@ -131,6 +173,42 @@ def test_conversation_rag_store_archive_refreshes_metadata_without_reembedding(t
 
     assert archive_sync == {"upserted": 0, "skipped": 1, "deleted": 0, "total": 1}
     assert hits[0]["status"] == "archived"
+
+
+def test_conversation_rag_store_search_spreads_hits_across_conversations(tmp_path) -> None:
+    """window가 많은 한 대화가 검색 결과를 독점하지 않아야 합니다."""
+
+    sqlite_store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    rag_store = conversation_rag_store(tmp_path)
+    long_conversation_id = sqlite_store.create_conversation("긴 공통키워드 대화")["conversation_id"]
+    for index in range(4 * ConversationRAGStore.WINDOW_SIZE):
+        sqlite_store.append_message(long_conversation_id, "user", f"공통키워드 {index}번째 메시지다.")
+    short_conversation_id = sqlite_store.create_conversation("짧은 공통키워드 대화")["conversation_id"]
+    sqlite_store.append_message(short_conversation_id, "user", "공통키워드 짧은 대화다.")
+    rag_store.sync_from_sqlite(sqlite_store)
+
+    hits = rag_store.search(query="공통키워드", top_k=3)
+
+    assert len(hits) == 3
+    long_hits = [hit for hit in hits if hit["conversation_id"] == long_conversation_id]
+    assert len(long_hits) <= ConversationRAGStore.MAX_WINDOWS_PER_CONVERSATION
+    assert any(hit["conversation_id"] == short_conversation_id for hit in hits)
+
+
+def test_conversation_rag_store_search_fills_limit_from_single_conversation(tmp_path) -> None:
+    """검색 대상 대화가 하나뿐이면 제한 때문에 결과가 줄어들면 안 됩니다."""
+
+    sqlite_store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    rag_store = conversation_rag_store(tmp_path)
+    conversation_id = sqlite_store.create_conversation("유일한 대화")["conversation_id"]
+    for index in range(4 * ConversationRAGStore.WINDOW_SIZE):
+        sqlite_store.append_message(conversation_id, "user", f"단독키워드 {index}번째 메시지다.")
+    rag_store.sync_from_sqlite(sqlite_store)
+
+    hits = rag_store.search(query="단독키워드", top_k=4)
+
+    assert len(hits) == 4
+    assert {hit["conversation_id"] for hit in hits} == {conversation_id}
 
 
 def test_conversation_rag_store_reuses_sync_result_when_sqlite_unchanged(tmp_path, monkeypatch) -> None:

@@ -5,7 +5,11 @@ from __future__ import annotations
 대화 1건을 통째로 청크 하나에 담으면 메시지가 한 건 붙을 때마다 대화 전문을 다시
 embedding해야 해서 누적 비용이 대화 길이의 제곱으로 늘어납니다. 그래서 메시지를
 `WINDOW_SIZE`개씩 끊어 청크로 만들고, 이미 가득 찬 window는 내용이 더 바뀌지 않으므로
-다시 embedding하지 않습니다. 제목/상태/수정 시각처럼 embedding 대상 본문이 아닌 값은
+다시 embedding하지 않습니다.
+
+대화 제목은 사용자가 대화를 부르는 이름이라 검색어로 자주 쓰이므로 embedding 본문에
+포함합니다. 제목은 메시지를 붙일 때 바뀌지 않으므로 append 비용은 여전히 window 1개입니다.
+반대로 상태와 수정 시각은 메시지를 붙일 때마다 바뀌지만 검색 대상 본문은 아니므로
 `source_hash`에서 제외하고 metadata만 갱신합니다.
 """
 
@@ -25,7 +29,10 @@ class ConversationRAGStore:
 
     COLLECTION_NAME = "kanana_conversation_chunks_openai"
     WINDOW_SIZE = 8
-    MUTABLE_METADATA_FIELDS = ("title", "status", "updated_at")
+    # 제목은 embedding 본문에 들어가므로 metadata-only 갱신 대상이 아닙니다.
+    MUTABLE_METADATA_FIELDS = ("status", "updated_at")
+    # 한 대화가 검색 결과를 독점하지 않도록 대화당 기본 window 수를 제한합니다.
+    MAX_WINDOWS_PER_CONVERSATION = 2
 
     def __init__(
         self,
@@ -170,35 +177,48 @@ class ConversationRAGStore:
         distances = result.get("distances", [[]])[0]
         ids = result.get("ids", [[]])[0]
         hits: list[dict[str, Any]] = []
+        # 한 대화의 window들이 결과를 독점하지 않도록 대화당 개수를 제한하고,
+        # 넘친 것은 자리가 남을 때만 뒤에 채웁니다. 특정 대화를 지목한 검색은 제한하지 않습니다.
+        overflow: list[dict[str, Any]] = []
+        windows_per_conversation: dict[str, int] = {}
 
         for index, document in enumerate(documents):
             metadata = metadatas[index] or {}
             hit_conversation_id = str(metadata.get("conversation_id") or "")
             if not conversation_id and exclude_conversation_id and hit_conversation_id == exclude_conversation_id:
                 continue
-            hits.append(
-                {
-                    "chunk_id": ids[index],
+            hit = {
+                "chunk_id": ids[index],
+                "conversation_id": hit_conversation_id,
+                "title": metadata.get("title", ""),
+                "status": metadata.get("status", ""),
+                "content": document,
+                "distance": distances[index] if index < len(distances) else None,
+                "metadata": {
                     "conversation_id": hit_conversation_id,
                     "title": metadata.get("title", ""),
                     "status": metadata.get("status", ""),
-                    "content": document,
-                    "distance": distances[index] if index < len(distances) else None,
-                    "metadata": {
-                        "conversation_id": hit_conversation_id,
-                        "title": metadata.get("title", ""),
-                        "status": metadata.get("status", ""),
-                        "created_at": metadata.get("created_at", ""),
-                        "updated_at": metadata.get("updated_at", ""),
-                        "window_index": metadata.get("window_index", 0),
-                        "message_count": metadata.get("message_count", 0),
-                        "last_message_at": metadata.get("last_message_at", ""),
-                        "source_hash": metadata.get("source_hash", ""),
-                    },
-                }
-            )
+                    "created_at": metadata.get("created_at", ""),
+                    "updated_at": metadata.get("updated_at", ""),
+                    "window_index": metadata.get("window_index", 0),
+                    "message_count": metadata.get("message_count", 0),
+                    "last_message_at": metadata.get("last_message_at", ""),
+                    "source_hash": metadata.get("source_hash", ""),
+                },
+            }
+            seen_windows = windows_per_conversation.get(hit_conversation_id, 0)
+            if conversation_id or seen_windows < self.MAX_WINDOWS_PER_CONVERSATION:
+                windows_per_conversation[hit_conversation_id] = seen_windows + 1
+                hits.append(hit)
+                if len(hits) >= normalized_limit:
+                    return hits
+            else:
+                overflow.append(hit)
+
+        for hit in overflow:
             if len(hits) >= normalized_limit:
                 break
+            hits.append(hit)
         return hits
 
     def context_from_hits(self, hits: list[dict[str, Any]]) -> str:
@@ -343,9 +363,10 @@ class ConversationRAGStore:
             return []
 
         conversation_id = str(conversation["conversation_id"])
+        title = str(conversation.get("title") or "새 대화")
         shared_metadata = {
             "conversation_id": conversation_id,
-            "title": str(conversation.get("title") or "새 대화"),
+            "title": title,
             "status": str(conversation.get("status") or "active"),
             "created_at": str(conversation.get("created_at") or ""),
             "updated_at": str(conversation.get("updated_at") or ""),
@@ -354,13 +375,15 @@ class ConversationRAGStore:
         return [
             {
                 "chunk_id": f"conversation:{conversation_id}#w{window_index}",
-                "content": "\n".join(self._message_line(message) for message in window),
+                "content": "\n".join(
+                    [f"대화 제목: {title}", *(self._message_line(message) for message in window)]
+                ),
                 "metadata": {
                     **shared_metadata,
                     "window_index": window_index,
                     "message_count": len(window),
                     "last_message_at": str(window[-1].get("created_at") or ""),
-                    "source_hash": self._source_hash(conversation_id, window_index, window),
+                    "source_hash": self._source_hash(conversation_id, window_index, title, window),
                 },
             }
             for window_index, window in enumerate(windows)
@@ -374,17 +397,28 @@ class ConversationRAGStore:
         created_at = str(message.get("created_at") or "")
         return f"{created_at} | {role} | {content}"
 
-    def _source_hash(self, conversation_id: str, window_index: int, messages: list[dict[str, Any]]) -> str:
-        """window에 실제로 담긴 메시지만 해싱합니다.
+    def _source_hash(
+        self,
+        conversation_id: str,
+        window_index: int,
+        title: str,
+        messages: list[dict[str, Any]],
+    ) -> str:
+        """embedding 본문에 들어가는 값만 해싱합니다.
 
-        제목/상태/대화 수정 시각은 embedding 본문이 아니므로 제외합니다. 이 값들이
-        해시에 들어가 있으면 메시지 한 건이 추가될 때마다 과거 window까지 전부
-        다시 embedding됩니다.
+        제목은 본문에 포함되므로 해시에도 넣습니다. 제목이 바뀌면 그 대화의 window만
+        다시 embedding되는데, 제목은 메시지를 붙일 때 바뀌지 않으므로 append 비용에는
+        영향이 없습니다.
+
+        반대로 상태와 대화 수정 시각은 본문이 아니므로 제외합니다. 이 값들이 해시에
+        들어가 있으면 메시지 한 건이 추가될 때마다 과거 window까지 전부 다시
+        embedding됩니다.
         """
 
         source = {
             "conversation_id": conversation_id,
             "window_index": window_index,
+            "title": title,
             "messages": messages,
         }
         return self._digest(source)
