@@ -92,7 +92,8 @@ def test_week04_search_conversation_messages_finds_app_chat_messages(tmp_path, m
     assert message_result["ok"] is True
     assert message_result["tool_name"] == "search_conversation_messages"
     assert message_result["rows"] == message_result["hits"]
-    assert message_result["sync"]["upserted"] == 2
+    assert message_result["sync"]["upserted"] == 1
+    assert message_result["sync"]["skipped"] == 1
     assert "SQLite 대화 RAG 검색 결과" in message_result["context"]
     assert "내가 가지고 있는 양은 검은색 양이다." in message_result["context"]
     assert any(

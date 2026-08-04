@@ -94,6 +94,75 @@ def test_conversation_rag_store_search_can_target_one_conversation(tmp_path) -> 
     assert "두 번째 대화" in hits[0]["content"]
 
 
+def test_conversation_rag_store_reembeds_only_the_last_window_on_append(tmp_path) -> None:
+    """메시지를 한 건 붙여도 마지막 window 하나만 다시 embedding해야 합니다.
+
+    window가 2개 이상인 대화로 확인합니다. 대화가 한 window 안에 들어가면
+    `대화 1건 = 청크 1건`이던 예전 방식과 수치가 같아 회귀를 잡지 못합니다.
+    """
+
+    sqlite_store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    rag_store = conversation_rag_store(tmp_path)
+    conversation_id = sqlite_store.create_conversation("긴 대화")["conversation_id"]
+    for index in range(2 * ConversationRAGStore.WINDOW_SIZE):
+        sqlite_store.append_message(conversation_id, "user", f"{index}번째 메시지입니다.")
+
+    first_sync = rag_store.sync_from_sqlite(sqlite_store)
+    sqlite_store.append_message(conversation_id, "user", "마지막에 붙인 메시지입니다.")
+    append_sync = rag_store.sync_from_sqlite(sqlite_store)
+
+    assert first_sync == {"upserted": 2, "skipped": 0, "deleted": 0, "total": 2}
+    # 새 window가 하나 열리고 가득 찬 window 2개는 그대로 유지됩니다.
+    assert append_sync == {"upserted": 1, "skipped": 2, "deleted": 0, "total": 3}
+
+
+def test_conversation_rag_store_archive_refreshes_metadata_without_reembedding(tmp_path) -> None:
+    """보관 상태 변경은 metadata만 갱신하고 다시 embedding하지 않아야 합니다."""
+
+    sqlite_store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    rag_store = conversation_rag_store(tmp_path)
+    conversation_id = sqlite_store.create_conversation("보관할 대화")["conversation_id"]
+    sqlite_store.append_message(conversation_id, "user", "보관 전에 남긴 메시지입니다.")
+    rag_store.sync_from_sqlite(sqlite_store)
+
+    sqlite_store.archive_conversation(conversation_id)
+    archive_sync = rag_store.sync_from_sqlite(sqlite_store)
+    hits = rag_store.search(query="보관 전에 남긴", top_k=3)
+
+    assert archive_sync == {"upserted": 0, "skipped": 1, "deleted": 0, "total": 1}
+    assert hits[0]["status"] == "archived"
+
+
+def test_conversation_rag_store_reuses_sync_result_when_sqlite_unchanged(tmp_path, monkeypatch) -> None:
+    """SQLite가 그대로면 다시 청킹하지 않고 직전 sync 결과를 그대로 씁니다.
+
+    search tool은 호출마다 sync를 먼저 하므로, 바뀐 게 없을 때 대화 전문을 다시 읽고
+    Chroma metadata를 전량 조회하는 비용을 없앱니다.
+    """
+
+    sqlite_store = AppSQLiteStore(tmp_path / "app.sqlite3")
+    rag_store = conversation_rag_store(tmp_path)
+    conversation_id = sqlite_store.create_conversation("캐시 확인 대화")["conversation_id"]
+    sqlite_store.append_message(conversation_id, "user", "캐시 확인용 메시지입니다.")
+    rag_store.sync_from_sqlite(sqlite_store)
+
+    chunk_calls: list[str] = []
+    original_conversation_chunks = rag_store._conversation_chunks
+    monkeypatch.setattr(
+        rag_store,
+        "_conversation_chunks",
+        lambda store: (chunk_calls.append("called"), original_conversation_chunks(store))[1],
+    )
+    cached_sync = rag_store.sync_from_sqlite(sqlite_store)
+    sqlite_store.append_message(conversation_id, "user", "메시지를 하나 더 붙입니다.")
+    changed_sync = rag_store.sync_from_sqlite(sqlite_store)
+
+    assert cached_sync == {"upserted": 0, "skipped": 1, "deleted": 0, "total": 1}
+    # 캐시가 적중한 호출에서는 청킹을 건너뛰고, 메시지가 붙은 뒤에만 한 번 실행됩니다.
+    assert chunk_calls == ["called"]
+    assert changed_sync == {"upserted": 1, "skipped": 0, "deleted": 0, "total": 1}
+
+
 def test_conversation_rag_store_search_excludes_current_conversation(tmp_path) -> None:
     sqlite_store = AppSQLiteStore(tmp_path / "app.sqlite3")
     rag_store = conversation_rag_store(tmp_path)
