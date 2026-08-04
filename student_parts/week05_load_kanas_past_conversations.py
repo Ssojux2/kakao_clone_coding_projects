@@ -14,6 +14,7 @@ from fixed.external_people_store import (
     external_schedule_summary,
     normalize_external_member_names,
     normalize_external_schedule_date_bounds,
+    strip_parenthetical_text,
 )
 from fixed.llm import chat_model
 from fixed.mcp_client import (
@@ -92,8 +93,15 @@ _WEEK05_AGENT: Any | None = None
 #
 #   5. collect_member_schedules
 #      - 3주차 이후 저장된 내 일정은 앱 SQLite에서 읽고, 현재 대화의 임시 일정만 추가로 합칩니다.
+#      - 저장된 내 일정은 kind로 거르지 않습니다. 개인 일정과 그룹 일정 모두 "나" row로 합칩니다.
+#        그룹 일정은 저장 시 참석자별 공유 row로도 동기화되지만, 이번 조율 대상에 그 참석자가
+#        없으면 외부 조회로는 잡히지 않아 앱 DB에서 읽지 않으면 내 바쁜 시간에서 통째로 빠집니다.
 #      - 외부 멤버 일정은 call_mcp_tool_sync("extract_schedules_from_history", args) 결과를 이 tool 안에서 읽습니다.
 #      - 두 출처를 member_name/title/date/start_time/end_time/notes가 있는 rows 배열로 직접 합칩니다.
+#      - 합친 rows는 (member_name, date, start_time, 제목) 기준으로 한 번 중복을 제거합니다.
+#        member_names에 "나"가 들어오면 같은 일정이 앱 DB와 공유 저장소 양쪽에서 들어오기 때문입니다.
+#        두 경로가 같은 일정을 다르게 다듬으므로 값을 그대로 비교하면 안 됩니다. 제목은 소괄호와
+#        공백을 정리해서 비교하고, end_time은 앱 DB 경로만 "미정"을 "18:00"으로 바꾸므로 키에서 뺍니다.
 #      - schedule_summary도 함께 반환해 LLM이 바쁜 시간을 자연어로 설명할 수 있게 합니다.
 #      - PERSONAL_SCHEDULES는 현재 대화 범위의 아직 DB에 없는 임시 일정만 합치고, SQLite에 이미 저장된 일정과 중복하지 않습니다.
 #      - Week 6 추가 과제(find_common_available_slots)가 이 tool의 rows를 busy_rows 근거로 사용합니다.
@@ -116,6 +124,7 @@ _WEEK05_AGENT: Any | None = None
 #     어떤 tool이 어떤 순서로 호출됐는지 확인합니다.
 #     collect_member_schedules 결과 rows에 "나"와 외부 멤버 일정이 같은 구조로 들어 있고,
 #     list_shared_schedules 결과에 rows와 schedule_summary가 유지되는지 확인합니다.
+#     이번 조율 대상에 없는 멤버와 잡아둔 그룹 일정도 "나" row로 들어오는지 함께 확인합니다.
 #   - 추가 과제: create_shared_schedule로 등록한 row가 list_shared_schedules 조회에 나타나고
 #     delete_shared_schedule로 삭제되는지 확인합니다.
 #
@@ -124,7 +133,7 @@ _WEEK05_AGENT: Any | None = None
 #     Week 1 임시 일정이 어느 대화 범위에 속하는지 읽습니다. session_id가 없으면 기본 scope로 처리합니다.
 #
 #   - [메인] _personal_schedules_for_current_scope()
-#     Week 3 이후 SQLite에 저장된 내 일정과 현재 대화에만 남아 있는 Week 1 임시 일정을 합칩니다.
+#     Week 3 이후 SQLite에 저장된 내 일정(개인/그룹)과 현재 대화에만 남아 있는 Week 1 임시 일정을 합칩니다.
 #     이미 SQLite에 저장된 일정과 임시 일정이 중복되지 않도록 schedule_id/id를 기준으로 한 번 걸러냅니다.
 #
 #   - [공통] json_payload(payload)
@@ -141,7 +150,17 @@ _WEEK05_AGENT: Any | None = None
 #
 #   - [메인] _structured_request_from_schedule_row(row)
 #     SQLite schedule row나 Week 1 임시 schedule row를 Week 2 StructuredRequest 모양으로 읽습니다.
+#     kind는 SQLite row의 request_kind에서 읽고, 그 값이 없는 Week 1 임시 일정은 개인 일정으로 봅니다.
 #     뒤에서 내 일정 row를 외부 멤버 row와 같은 구조로 맞출 때 사용합니다.
+#
+#   - [메인] _my_schedule_notes(request)
+#     내 일정 row의 notes를 개인 일정과 그룹 일정으로 구분해 만듭니다.
+#     그룹 일정은 참석자를 함께 적어 LLM이 어떤 회의로 시간이 찼는지 설명할 수 있게 합니다.
+#
+#   - [메인] _dedupe_schedule_rows(rows)
+#     앱 DB 경로와 외부 공유 저장소 경로로 같은 일정이 두 번 들어오는 경우를 한 번만 남깁니다.
+#     공유 저장소가 제목을 다듬고 앱 DB 경로만 end_time을 채워 넣는 차이를 비교 키에서 흡수합니다.
+#     앞에 오는 앱 DB row를 남기므로 my_rows를 external rows보다 먼저 두어야 합니다.
 #
 #   - [메인] _collect_member_schedules(...)
 #     내 일정과 외부 멤버 일정을 같은 member_name/title/date/start_time/end_time/notes row 구조로 합칩니다.
@@ -187,9 +206,13 @@ def _schedule_scope(schedule: dict[str, Any]) -> str:
 
 
 def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
-    """SQLite 저장 일정과 현재 대화의 임시 일정만 group 조율 후보로 사용합니다."""
+    """SQLite에 저장된 내 일정(개인/그룹)과 현재 대화의 임시 일정을 group 조율 후보로 사용합니다.
 
-    db_schedules = AppSQLiteStore(CONFIG.app_db_path).list_schedules(limit=200, kind="personal_schedule")
+    그룹 일정도 owner가 '나'인 내 일정이므로 kind로 거르지 않습니다. 조율 대상에 없는
+    멤버와 잡아둔 그룹 일정은 외부 공유 저장소 조회 경로로는 잡히지 않기 때문입니다.
+    """
+
+    db_schedules = AppSQLiteStore(CONFIG.app_db_path).list_schedules(limit=200)
     seen_ids = {str(schedule.get("schedule_id")) for schedule in db_schedules if schedule.get("schedule_id")}
     session_id = current_session_scope()
     current_memory_schedules = [
@@ -267,10 +290,14 @@ class CollectMemberSchedulesInput(BaseModel):
 
 
 def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequest:
-    """앱 일정 row를 Week 2 StructuredRequest 기준으로 읽습니다."""
+    """앱 일정 row를 Week 2 StructuredRequest 기준으로 읽습니다.
+
+    SQLite row는 `request_kind`로 개인/그룹을 구분합니다. Week 1 임시 일정 row에는
+    이 값이 없으므로 개인 일정으로 봅니다.
+    """
 
     return StructuredRequest(
-        kind="personal_schedule",
+        kind="group_schedule" if row.get("request_kind") == "group_schedule" else "personal_schedule",
         title=row.get("title"),
         date=row.get("date"),
         start_time=row.get("start_time"),
@@ -278,6 +305,40 @@ def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequ
         members=row.get("attendees") or row.get("members") or [],
         original_text=str(row.get("title") or ""),
     )
+
+
+def _my_schedule_notes(request: StructuredRequest) -> str:
+    """내 일정 row가 개인 일정인지, 참석자가 있는 그룹 일정인지 설명합니다."""
+
+    if request.kind != "group_schedule":
+        return "Nana 개인 일정"
+    members = [str(member).strip() for member in (request.members or []) if str(member).strip()]
+    return f"Nana 그룹 일정 · 참석자: {', '.join(members)}" if members else "Nana 그룹 일정"
+
+
+def _dedupe_schedule_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """같은 일정이 앱 DB와 공유 저장소 양쪽에서 들어와도 한 번만 남깁니다.
+
+    앱 DB에 저장된 내 일정은 공유 저장소에도 자동 동기화되므로, member_names에 "나"가
+    들어온 호출에서는 같은 일정이 두 경로로 들어옵니다. 앞에 오는 앱 DB row를 남깁니다.
+
+    두 경로가 같은 일정을 서로 다르게 다듬기 때문에 값을 그대로 비교하면 안 됩니다.
+      - 공유 저장소는 제목에서 소괄호를 지우고 공백을 하나로 줄입니다. 앱 DB는 원문을 둡니다.
+      - 앱 DB 경로만 end_time "미정"을 "18:00"으로 바꿉니다. 그래서 end_time은 키에서 뺍니다.
+        같은 사람이 같은 날 같은 시각에 시작하는 같은 제목의 일정은 하나로 봅니다.
+      - start_time이 비어 있으면 공유 저장소는 "미정"으로 저장하므로 같은 값으로 맞춥니다.
+    """
+
+    deduped: dict[tuple[str, ...], dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            str(row.get("member_name") or "").strip(),
+            str(row.get("date") or "").strip(),
+            str(row.get("start_time") or "").strip() or "미정",
+            strip_parenthetical_text(str(row.get("title") or "")),
+        )
+        deduped.setdefault(key, row)
+    return list(deduped.values())
 
 
 def _collect_member_schedules(
@@ -313,7 +374,7 @@ def _collect_member_schedules(
                 "date": schedule_date,
                 "start_time": request.start_time,
                 "end_time": request.end_time if end_time != "미정" else "18:00",
-                "notes": "Nana 개인 일정",
+                "notes": _my_schedule_notes(request),
             }
         )
 
@@ -329,11 +390,11 @@ def _collect_member_schedules(
                 },
             )
         )
-    rows = [*my_rows, *external_payload.get("rows", [])]
+    rows = _dedupe_schedule_rows([*my_rows, *external_payload.get("rows", [])])
     return {
         "ok": True,
         "tool_name": "collect_member_schedules",
-        "members": ["나", *normalized_members],
+        "members": ["나", *[name for name in normalized_members if name != "나"]],
         "rows": rows,
         "schedule_summary": external_schedule_summary(rows),
     }
@@ -510,6 +571,7 @@ def week05_prompt_parts() -> list[str]:
         "공유 일정 저장소에 등록된 row 자체를 확인해야 하면 list_shared_schedules를 사용한다. "
         "내 일정과 외부 멤버 일정을 함께 모아야 하면 collect_member_schedules를 사용한다. "
         "이때 내 이전 일정은 Week 3 이후 SQLite에 저장된 row를 기준으로 본다. "
+        "저장된 개인 일정과 그룹 일정은 모두 내가 그 시간에 바쁘다는 근거이므로 함께 본다. "
         "내 일정이 공유 저장소에도 보여야 할 때는 create_shared_schedule/delete_shared_schedule을 사용한다. "
         "Week 5에서는 여러 사람의 공통 가능 시간을 최종 결정하는 payload만 만들지 않고, "
         "이미 날짜와 시간이 정해진 일정 등록은 저장 도구로 처리한다. "

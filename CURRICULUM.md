@@ -68,7 +68,7 @@
 
 `week05_system_prompt`는 이전 대화 검색, 메시지 로드, 일정 추출, 멤버 일정 수집 tool의 사용 조건을 정의합니다. `search_previous_conversations`는 외부 SQLite 데이터베이스에서 이전 대화를 검색합니다. `load_conversation_messages`는 `conversation_id`로 특정 대화의 메시지를 시간순으로 불러옵니다. `extract_schedules_from_history`는 멤버 이름과 날짜 범위로 외부 대화 기록에 저장된 일정을 추출합니다.
 
-`collect_member_schedules`는 Week 1의 내 개인 일정과 Week 5의 외부 멤버 일정을 합쳐 그룹 조율용 busy-time 목록을 만듭니다. `load_langchain_mcp_tools`와 `load_langchain_mcp_tools_sync`는 local MCP server에서 LangChain tool 목록을 불러오는 adapter 흐름을 보여줍니다. `mcp_server/sqlite_mcp_server.py`의 `@mcp.tool` 함수는 학생 구현 대상이 아니라 wrapper tool이 호출하는 기준 구현으로 유지합니다.
+`collect_member_schedules`는 앱 DB에 저장된 내 일정과 Week 1의 임시 일정, Week 5의 외부 멤버 일정을 합쳐 그룹 조율용 busy-time 목록을 만듭니다. 저장된 내 일정은 개인 일정과 그룹 일정을 구분하지 않고 모두 "나" row로 합칩니다. 그룹 일정은 저장 시 참석자별 공유 row로도 동기화되지만, 그 참석자가 이번 조율 대상에 없으면 외부 조회 경로로는 잡히지 않기 때문입니다. `load_langchain_mcp_tools`와 `load_langchain_mcp_tools_sync`는 local MCP server에서 LangChain tool 목록을 불러오는 adapter 흐름을 보여줍니다. `mcp_server/sqlite_mcp_server.py`의 `@mcp.tool` 함수는 학생 구현 대상이 아니라 wrapper tool이 호출하는 기준 구현으로 유지합니다.
 
 검증 포인트는 `member_names`, `date_from`, `date_to`를 바꿨을 때 외부 대화 row와 일정 row가 어떻게 달라지는지, `collect_member_schedules`의 `members`와 `rows`가 그룹 조율에 필요한 입력을 갖추는지 확인하는 것입니다.
 

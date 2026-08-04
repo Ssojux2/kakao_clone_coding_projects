@@ -534,3 +534,194 @@ def test_week05_collect_member_schedules_reads_external_rows_through_mcp_env(tmp
 
     assert len(external_rows) == 1
     assert any(row["title"] == "MCP 전용 일정" for row in external_rows)
+
+
+def _isolate_collect_member_schedules(tmp_path, monkeypatch, name: str) -> AppSQLiteStore:
+    """앱 DB와 외부 공유 DB를 테스트 전용 파일로 격리한 store를 만듭니다."""
+
+    app_db_path = tmp_path / f"{name}_app.sqlite3"
+    monkeypatch.setenv("KANANA_EXTERNAL_DB_PATH", str(tmp_path / f"{name}_shared.sqlite3"))
+    monkeypatch.setattr(week05_module, "CONFIG", replace(week05_module.CONFIG, app_db_path=app_db_path))
+    monkeypatch.setattr(week05_module, "PERSONAL_SCHEDULES", [])
+    return AppSQLiteStore(app_db_path)
+
+
+def test_week05_collect_member_schedules_includes_group_schedule_with_other_members(tmp_path, monkeypatch) -> None:
+    store = _isolate_collect_member_schedules(tmp_path, monkeypatch, "group_busy")
+    store.save_structured_request(
+        {
+            "kind": "group_schedule",
+            "title": "하린과 사전 미팅",
+            "date": "2026-07-14",
+            "start_time": "15:00",
+            "end_time": "16:00",
+            "members": ["하린"],
+        }
+    )
+
+    result = json.loads(
+        week05_module.collect_member_schedules.invoke(
+            {"member_names": ["민준"], "date_from": "2026-07-07", "date_to": "2026-07-17"}
+        )
+    )
+    my_rows = [row for row in result["rows"] if row["member_name"] == "나"]
+
+    assert [row["title"] for row in my_rows] == ["하린과 사전 미팅"]
+    assert my_rows[0]["date"] == "2026-07-14"
+    assert my_rows[0]["start_time"] == "15:00"
+
+
+def test_week05_collect_member_schedules_marks_my_row_notes_by_kind(tmp_path, monkeypatch) -> None:
+    store = _isolate_collect_member_schedules(tmp_path, monkeypatch, "kind_notes")
+    store.save_structured_request(
+        {
+            "kind": "personal_schedule",
+            "title": "개인 집중 작업",
+            "date": "2026-07-09",
+            "start_time": "09:00",
+            "end_time": "10:00",
+            "members": ["나"],
+        }
+    )
+    store.save_structured_request(
+        {
+            "kind": "group_schedule",
+            "title": "하린과 사전 미팅",
+            "date": "2026-07-14",
+            "start_time": "15:00",
+            "end_time": "16:00",
+            "members": ["하린"],
+        }
+    )
+
+    result = json.loads(
+        week05_module.collect_member_schedules.invoke(
+            {"member_names": ["민준"], "date_from": "2026-07-07", "date_to": "2026-07-17"}
+        )
+    )
+    notes_by_title = {
+        row["title"]: row["notes"] for row in result["rows"] if row["member_name"] == "나"
+    }
+
+    assert notes_by_title["개인 집중 작업"] == "Nana 개인 일정"
+    assert notes_by_title["하린과 사전 미팅"] == "Nana 그룹 일정 · 참석자: 하린"
+
+
+def test_week05_collect_member_schedules_dedupes_shared_copy_of_my_schedule(tmp_path, monkeypatch) -> None:
+    store = _isolate_collect_member_schedules(tmp_path, monkeypatch, "dedupe")
+    store.save_structured_request(
+        {
+            "kind": "personal_schedule",
+            "title": "개인 집중 작업",
+            "date": "2026-07-09",
+            "start_time": "09:00",
+            "end_time": "10:00",
+            "members": ["나"],
+        }
+    )
+
+    result = json.loads(
+        week05_module.collect_member_schedules.invoke(
+            {"member_names": ["나"], "date_from": "2026-07-07", "date_to": "2026-07-17"}
+        )
+    )
+    my_rows = [row for row in result["rows"] if row["member_name"] == "나"]
+
+    assert result["members"] == ["나"]
+    assert [row["title"] for row in my_rows] == ["개인 집중 작업"]
+    assert my_rows[0]["notes"] == "Nana 개인 일정"
+
+
+def _my_rows_for_saved_schedule(tmp_path, monkeypatch, name: str, payload: dict) -> list[dict]:
+    """일정 하나를 저장하고 member_names=["나"]로 수집한 내 row만 돌려줍니다."""
+
+    store = _isolate_collect_member_schedules(tmp_path, monkeypatch, name)
+    store.save_structured_request(payload)
+    result = json.loads(
+        week05_module.collect_member_schedules.invoke(
+            {"member_names": ["나"], "date_from": "2026-07-07", "date_to": "2026-07-17"}
+        )
+    )
+    return [row for row in result["rows"] if row["member_name"] == "나"]
+
+
+def test_week05_collect_member_schedules_dedupes_title_with_parentheses(tmp_path, monkeypatch) -> None:
+    """공유 저장소는 제목에서 소괄호를 지우므로, 그 차이로 중복이 남으면 안 됩니다."""
+
+    my_rows = _my_rows_for_saved_schedule(
+        tmp_path,
+        monkeypatch,
+        "paren_title",
+        {
+            "kind": "personal_schedule",
+            "title": "팀 회의 (온라인)",
+            "date": "2026-07-14",
+            "start_time": "15:00",
+            "end_time": "16:00",
+        },
+    )
+
+    assert len(my_rows) == 1
+
+
+def test_week05_collect_member_schedules_dedupes_undecided_end_time(tmp_path, monkeypatch) -> None:
+    """앱 DB 경로만 '미정'을 '18:00'으로 바꾸므로, 그 차이로 중복이 남으면 안 됩니다."""
+
+    my_rows = _my_rows_for_saved_schedule(
+        tmp_path,
+        monkeypatch,
+        "undecided_end",
+        {
+            "kind": "personal_schedule",
+            "title": "팀 회의",
+            "date": "2026-07-14",
+            "start_time": "15:00",
+            "end_time": "미정",
+        },
+    )
+
+    assert len(my_rows) == 1
+
+
+def test_week05_collect_member_schedules_dedupes_title_with_extra_spaces(tmp_path, monkeypatch) -> None:
+    """공유 저장소는 제목 공백을 하나로 줄이므로, 그 차이로 중복이 남으면 안 됩니다."""
+
+    my_rows = _my_rows_for_saved_schedule(
+        tmp_path,
+        monkeypatch,
+        "spaced_title",
+        {
+            "kind": "personal_schedule",
+            "title": "팀  회의  준비",
+            "date": "2026-07-14",
+            "start_time": "15:00",
+            "end_time": "16:00",
+        },
+    )
+
+    assert len(my_rows) == 1
+
+
+def test_week05_collect_member_schedules_keeps_distinct_schedules_in_same_slot(tmp_path, monkeypatch) -> None:
+    """정규화를 강하게 걸어도 제목이 다른 별개 일정까지 지워서는 안 됩니다."""
+
+    store = _isolate_collect_member_schedules(tmp_path, monkeypatch, "distinct_slot")
+    for title in ("팀 회의", "고객 미팅"):
+        store.save_structured_request(
+            {
+                "kind": "personal_schedule",
+                "title": title,
+                "date": "2026-07-14",
+                "start_time": "15:00",
+                "end_time": "16:00",
+            }
+        )
+
+    result = json.loads(
+        week05_module.collect_member_schedules.invoke(
+            {"member_names": ["나"], "date_from": "2026-07-07", "date_to": "2026-07-17"}
+        )
+    )
+    my_rows = [row for row in result["rows"] if row["member_name"] == "나"]
+
+    assert sorted(row["title"] for row in my_rows) == ["고객 미팅", "팀 회의"]
